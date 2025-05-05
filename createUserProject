@@ -1,0 +1,1674 @@
+*createuserproject
+
+1)errorcontroller.js
+
+  const AppError = require('../util/appError');
+
+
+const handleCastError = err => {
+    const message = `invalid ${err.path}:${err.value}.`
+    return new AppError(message, 400)
+}
+
+const handleValidationErr = err => {
+    const error = Object.values(err.errors).map(ele => ele.message);
+    const message = `invalid input data ${error.join('. ')}`;
+    return new AppError(message, 400);
+}
+
+const handelJwtError = err => new AppError('invalid token plz login again', 401);
+const handleJwtExp = err => new AppError('token expired plz login again', 401);
+
+
+const sendErrordev = (err, res) => {
+    console.log('development error',err)
+    res.status(err.statusCode).send({
+        status: err.status,
+        error: err,
+        stack: err.stack,
+        message: err.message
+    });
+}
+
+const sendErrorProd = (err, res) => {
+    console.log('error is comiing', err);
+    // console.log(err.isOperational, 'hiiii');
+    if (err.isOperational) {
+        res.status(err.statusCode).send({
+            status: err.status,
+            message: err.message,
+        });
+    } else {
+        res.status(500).send({
+            status: 'error',
+            message: 'something went wrong'
+        })
+    }
+}
+
+
+module.exports = (err, req, res, next) => {
+    err.statusCode = err.statusCode || 500;
+    err.status = err.status || 'error';
+
+    if (process.env.NODE_ENV === 'development') {
+        sendErrordev(err, res);
+
+    } else
+     if (process.env.NODE_ENV === 'production') {
+        let error = { ...err };
+        // console.log(err, 'hdhdgdgghjg')
+        if (error.name == 'CastError') error = handleCastError(error);
+
+        if (error.name == 'ValidationError') error = handleValidationErr(error);
+        if (error.name == 'JsonWebTokenError') error = handelJwtError(error);
+        if (error.name == 'TokenExpiredError') error = handleJwtExp(error);
+        sendErrorProd(error, res);
+    }
+
+}
+
+
+2)postController.js
+
+
+
+const postModel = require('../model/postModel');
+
+const userModel = require('../model/userModel');
+
+const multer = require('multer');
+
+const { validationResult } = require('express-validator');
+
+const appError = require('../util/appError');
+const catchAsync = require('../util/catchAsync');
+
+
+exports.createPost = catchAsync(async (req, res, next) => {
+    const error = validationResult(req);
+    if (!error.isEmpty()) {
+        // console.log("hiiiii",error.errors[0]?.msg)
+        return next(new appError(error.errors[0]?.msg, 422));
+    }
+
+    req.body.creator = req.user.id;
+    let post;
+    post = await postModel.create(req.body);
+    console.log(post, "posttttt");
+    let user = await userModel.find({ id: req.user.id });
+    console.log(user, "userrrrrrr");
+
+    if (user) {
+        user[0].post.push(post.id);
+        user[0].save();
+        res.status(201).json({
+            message: 'success',
+            data: "post created successfully!!!"
+        })
+    } else {
+        return next(new appError('plz login you are not active right now', 400));
+    }
+});
+
+
+
+exports.getAllpost = catchAsync(async (req, res, next) => {
+
+    let postList = await postModel.find();
+
+    if (!postList) {
+        return next(new appError('no data found!!', 400));
+    } else {
+        res.status(200).json({
+            message: 'success',
+            data: postList,
+        })
+    }
+
+
+});
+
+
+exports.getSinglePost = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+
+    let postDetails = await postModel.findById(id).populate('creator');
+
+    if (postDetails) {
+        res.status(200).json({
+            message: 'success',
+            data: postDetails
+        })
+    } else {
+        return next(new appError('Post is not present in database', 400));
+    }
+});
+
+
+exports.deletePost = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+    // try {
+    let post = await postModel.findByIdAndDelete(id);
+
+    let user = await userModel.find({ id: req.user.id });
+    if (user) {
+        // user[0].post.push(post.id);
+        user[0].post = user[0].post.filter(ele => ele != id);
+        console.log(user, "usersssssss");
+
+        user[0].save();
+        res.status(201).json({
+            message: 'success',
+            data: "post deleted successfully!!!"
+        })
+    } else {
+        return next(new appError('plz login you are not active right now', 400));
+    }
+
+
+});
+
+
+exports.updatePost = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+
+    if (req.file) req.body.imageUrl = req.file.filename;
+    const post = await postModel.findByIdAndUpdate(id, req.body);
+    if (post) {
+        res.status(200).json({
+            message: 'post updated succeessfully!!!',
+            data: post
+        });
+    } else {
+        return next(new appError('post is not present in database', 400));
+    }
+});
+
+
+
+exports.comment = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+    console.log(id, "idddd")
+    let postDetails = await postModel.find({ id: id })
+    if (!postDetails) {
+        return next(new appError('post is not present in database', 400));
+    } else {
+        req.body.userId = req.user.id;
+        console.log(postDetails[0].comments, "request body");
+      req.body.context ? postDetails[0].comments.push(req.body) : postDetails[0].reactions.push(req.body)
+        postDetails[0].save();
+        res.status(201).json({
+            message: 'success',
+            data: `${req.body.context ? 'Commented' : 'Like'} on post successfully!!!`
+        })
+    }
+})
+
+
+
+
+const multiStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'img')
+    },
+    filename: (req, file, cb) => {
+        const ext = file.mimetype.split('/')[1].split('+')[0];
+        // console.log(ext,"ext")
+        cb(null, `user-${req.user.id}-${Date.now()}.${ext}`);
+    }
+});
+
+// const multiStorage = multer.memoryStorage();
+
+const multerFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image')) {
+        cb(null, true)
+    }
+    else {
+        cb(new appError('not a image file', 404), false)
+    }
+}
+
+const upload = multer({
+    storage: multiStorage,
+    fileFilter: multerFilter
+});
+
+exports.uploadPostImage = upload.single('postImage');
+
+
+
+
+
+
+3)templateController.js
+
+const templateModel=require('../model/templateModel');
+
+const { validationResult } = require('express-validator');
+const fs=require('fs')
+const csv = require('csv-parser');
+const appError=require('../util/appError')
+const catchAsync=require('../util/catchAsync');
+const get_ip = require('ipware')().get_ip;
+const multer=require('multer');
+const Joi = require('joi');
+
+// const redis=require('../util/redisconnection');
+
+
+const multiStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'public')
+    },
+    filename: (req, file, cb) => {
+        const ext = file.mimetype.split('/')[1];
+        cb(null, `template.${ext}`);
+    }
+});
+
+
+const multerFilter = (req, file, cb) => {
+    if (file.mimetype == 'text/csv') { // checking the MIME type of the uploaded file
+        cb(null, true);
+    } else {
+        cb(new appError('Please Upload Proper CSV file', 400), false);
+    }
+}
+
+const upload = multer({
+    storage: multiStorage,
+    fileFilter: multerFilter
+
+});
+
+exports.uploadFile = upload.single('File');
+
+let results = [];
+
+exports.createTemplate = catchAsync(async (req, res, next) => {
+    // console.log(req, "req");
+
+    results = [];
+    fs.createReadStream(req.file.path)
+        .pipe(csv({}))
+        .on('data', (data) => {
+            results.push(data);
+
+        })
+        .on('end', async () => {
+           
+            res.status(201).send({ message: "All Templates Created Successfully!" });
+            // console.log(results)
+            for (let i = 0; i < results.length; i++) {
+                console.log(results[i],"result");
+                
+                let finalObj = {
+                    username: results[i].username,
+                    system_ip: get_ip(req).clientIp,
+                    bot_name: results[i].bot_name,
+                    name: results[i].name,
+                    variables: results[i].variables ? results[i].variables.toString().split(",") : [],
+                    category: results[i].category ? results[i].category : "",
+                    status: results[i].status ? results[i].status : ""
+                }
+
+                if (results[i].sub_type == 'text') {
+                    let newobj = {};
+                    Object.keys(results[i]).forEach((ele) => {
+                        ele = ele.toString().trim();
+                        if (ele.split("_")[0] === "suggestion") newobj[ele] = results[i][ele]
+                    });
+
+                    let SuggestionArr = [];
+                    Array(11).fill(1).forEach((ele, idx) => {
+                        let innerObj = {};
+                        let currentFields = Object.keys(newobj).filter(key => key.includes(idx + 1));
+                        if (currentFields.length) {
+                            currentFields.forEach(innerEle => {
+                                innerObj[innerEle.slice(innerEle.lastIndexOf("_") + 1)] = newobj[innerEle]
+                            });
+                            SuggestionArr.push(innerObj)
+                        }
+                    });
+
+                    SuggestionArr = SuggestionArr.filter(ele => Object.keys(ele).length && Object.values(ele).every(key => key));  // Removing empty {} and pushed in [] 
+
+                    finalObj["payload"] = {
+                        "sub_type": results[i].sub_type ? results[i].sub_type : "",
+                        "data": [
+                            {
+                                "text": results[i].text ? results[i].text : "",
+                                "suggestions": SuggestionArr.length ? SuggestionArr : []
+                            }
+                        ]
+                    }
+
+                    // console.log("TEXT", JSON.stringify(finalObj))
+
+
+                }
+                else if (results[i].sub_type == 'rich_card') {
+
+                    let newobj = {};
+                    Object.keys(results[i]).forEach((ele) => {
+                        ele = ele.toString().trim();
+                        if (ele.split("_")[0] === "suggestion") newobj[ele] = results[i][ele]
+                    });
+
+
+                    let SuggestionArr = [];
+                    Array(4).fill(1).forEach((ele, idx) => {
+                        let innerObj = {};
+                        let currentFields = Object.keys(newobj).filter(key => key.includes(idx + 1));
+                        if (currentFields.length) {
+                            currentFields.forEach(innerEle => {
+                                innerObj[innerEle.slice(innerEle.lastIndexOf("_") + 1)] = newobj[innerEle]
+                            });
+                            SuggestionArr.push(innerObj)
+                        }
+                    });
+
+                    SuggestionArr = SuggestionArr.filter(ele => Object.keys(ele).length && Object.values(ele).every(key => key));  // Removing empty {} and pushed in [] 
+
+
+                    finalObj["payload"] = {
+                        "sub_type": results[i].sub_type ? results[i].sub_type : "",
+                        "data": [
+                            {
+                                "title": results[i].rich_title ? results[i].rich_title : "",
+                                "description": results[i].rich_description ? results[i].rich_description : "",
+                                "url": results[i].rich_url ? results[i].rich_url : "",
+                                "cardHeight": results[i].rich_cardHeight ? results[i].rich_cardHeight : "",
+                                "cardOrientation": results[i].rich_cardOrientation ? results[i].rich_cardOrientation : "",
+                                "suggestions": SuggestionArr.length ? SuggestionArr : []
+                            }
+                        ]
+                    }
+
+
+                    // console.log("RICH-CARD", JSON.stringify(finalObj))
+
+                }
+                else if (results[i].sub_type == 'carousel') {
+                    let newObj = {};
+                    Object.keys(results[i]).forEach((ele) => {
+                        ele = ele.toString().trim();
+                        if (ele.split("_")[0] === "card") newObj[ele] = results[i][ele]
+                    });
+
+                    // console.log(newObj, "newobj");
+                    let carouselArr = []
+                    Array(10).fill(1).forEach((cardEle, idx) => {
+                        let card = {};
+                        let currentCardFields = Object.keys(newObj).filter(ele => ele.includes("card_" + (idx + 1)));
+                        // console.log(currentCardFields, 'fileds');
+                        let fieldExceptSuggestion = currentCardFields.filter(ele => !ele.includes('suggestion'));
+                        if (currentCardFields.length) {
+                            let suggestionArr = []
+                            Array(4).fill(1).forEach((sugEle, innerIdx) => {  //  Suggestion level mapping
+                                let innerObj = {}
+                                let suggestionFields = currentCardFields.filter(ele => ele.includes("card_" + (idx + 1) + "_suggestion_" + (innerIdx + 1)));
+                                // console.log(suggestionFields, "suggestion");
+                                if (suggestionFields.length) {
+                                    suggestionFields.forEach(innerEle => {
+                                        innerObj[innerEle.slice(innerEle.lastIndexOf("_") + 1)] = newObj[innerEle]
+                                    });
+                                    suggestionArr.push(innerObj)
+                                };
+                            });
+                            suggestionArr = suggestionArr.filter(ele => Object.keys(ele).length && Object.values(ele).every(key => key));
+                            fieldExceptSuggestion.forEach((cardField) => {
+                                card[cardField.slice(cardField.lastIndexOf("_") + 1)] = newObj[cardField]
+                            });
+
+                            card["suggestions"] = suggestionArr.length ? suggestionArr : [];
+                            carouselArr.push(card)
+
+                        }
+
+
+                    })
+                    carouselArr = carouselArr.filter(ele => Object.keys(ele).length);
+                    finalObj["payload"] = {
+                        "sub_type": results[i].sub_type ? results[i].sub_type : "",
+                        "data": carouselArr
+                    }
+
+                    // console.log("CAROUSEL", JSON.stringify(finalObj))
+
+                }
+
+                const TemplateSchema = Joi.object({
+                    username: Joi.string().required(),
+                    bot_name: Joi.string().required(),
+                    name: Joi.string().required(),
+                    variables: Joi.array().items(Joi.string()),
+                    category: Joi.string().required().valid('text', 'rich'),
+                    status: Joi.string(),
+                    system_ip: Joi.string().ip({ version: ['ipv4', 'ipv6'] }).required(),
+                    payload: Joi.any().required()
+                })
+                try {
+                    const { value, warning } = await TemplateSchema.validate(finalObj);
+                    if (warning) continue
+                    console.log(value, 'validateData=> ', warning)
+                    // templateLogger.info("USER DETAILS", { obj: ` IP : ${get_ip(req).clientIp},"templateData":${JSON.stringify(value)}` });
+                    let { status, errMsg } = await createTemplate(value);
+                    if (errMsg) {
+                        continue;
+                    }
+                    console.log('errMsg=> ', errMsg, 'stuats=>>', status)
+                }
+                catch (err) { continue }
+               
+            }
+        });
+});
+
+
+async function createTemplate(info) {
+    // console.log(info, "info");
+
+    try {
+        const query = await templateModel.create(info);
+        // redis.rpush("templateList",query)
+        // console.log(query.length, 'query');
+        if (query) {
+            return { status: true, errMsg: '' };
+        }
+    } catch (err) {
+        // console.log('hiii');
+        console.log(err)
+        return { status: false, errMsg: err };
+    }
+
+}
+
+
+exports.getTemplate=catchAsync(async (req,res,next)=>{
+    let TemplateData;
+
+    //  TemplateData= await redis.lrange('templateList',0,-1);
+
+    console.log(TemplateData)
+
+    if(TemplateData){
+        console.log("inside redis database");
+         return res.status(200).json({
+            message: 'success',
+            total:TemplateData.length,
+            data: TemplateData
+        })
+    }else{
+        let page = req.query.page;
+        let limit = req.query.limit;
+        const data= await templateModel.find().skip((page - 1) * limit).limit(limit);
+            if(!data){
+                return next(new appError('no data found',400));
+            }else{
+                return res.status(200).json({
+                    message: 'success',
+                    total:data.length,
+                    data: data
+                })
+            }
+        }
+
+    
+    });
+
+
+exports.deleteTemplate=catchAsync(async(req,res,next)=>{
+    const id=req.params.id;
+    const data= await templateModel.findByIdAndDelete({_id:id});
+    if(data){
+        return res.status(200).json({
+            message:'success',
+            data:"Template Delete Successfully!"
+        })
+    }else{
+        return next(new appError('no data found!!',400));
+    }
+})
+
+
+
+
+
+4)userController.js
+
+const userModel = require('../model/userModel');
+
+const { validationResult } = require('express-validator');
+
+const bcrypt = require('bcryptjs');
+
+const jwt = require('jsonwebtoken')
+const crypto=require('crypto');
+
+const multer=require('multer');
+
+const fs=require('fs')
+const csv = require('csv-parser');
+const appError=require('../util/appError');
+const get_ip = require('ipware')().get_ip;
+
+const nodemailer = require("nodemailer");
+
+const catchAsync=require('../util/catchAsync');
+
+const Email=require('../util/email');
+
+const logger=require('../util/winston');
+
+
+// const redis=require('../util/redisconnection');
+
+
+
+const multiStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'img')
+    },
+    filename: (req, file, cb) => {
+        const ext = file.mimetype.split('/')[1].split('+')[0];
+        // console.log(ext,"ext")
+        cb(null, `user-${req.user.id}-${Date.now()}.${ext}`);
+    }
+});
+
+// const multiStorage = multer.memoryStorage();
+
+const multerFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image')) {
+        cb(null, true)
+    }
+    else {
+        cb(new appError('not a image file', 404), false)
+    }
+}
+
+const upload = multer({
+    storage: multiStorage,
+    fileFilter: multerFilter
+});
+
+exports.uploadPhoto = upload.single('image');
+
+
+const multiStorageFile = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'public')
+    },
+    filename: (req, file, cb) => {
+        const ext = file.mimetype.split('/')[1];
+        cb(null, `userFile.${ext}`);
+    }
+});
+
+
+const multerFilterFile = (req, file, cb) => {
+    if (file.mimetype == 'text/csv') { // checking the MIME type of the uploaded file
+        cb(null, true);
+    } else {
+        cb(new appError('not a proper file', 400), false);
+    }
+}
+
+const uploadFile = multer({
+    storage: multiStorageFile,
+    fileFilter: multerFilterFile
+
+});
+
+exports.uploadFile = uploadFile.single('myFile');
+
+
+
+const creatSendToken = (user, status, res) => {
+    // console.log(res);
+    const token = signToken(user._id, user.name);
+    // res.cookie('jwt', token, cookieOption)
+
+    //remove the password form the output
+    // user.password = undefined;
+    // user.cnfpassword = undefined;
+
+    res.status(status).send({
+        status: 'success',
+        token,
+        data: {
+            user
+        }
+    });
+}
+
+
+const signToken = (id, name) => {
+    return jwt.sign({ id: id, name: name }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRED });
+}
+
+
+exports.signUp = catchAsync(async (req, res, next) => {
+    // res.send('signup function called')
+    const error = validationResult(req);
+
+    if (!error.isEmpty()) {
+        // console.log("hiiiii",error.errors[0]?.msg)
+        return next(new appError(error.errors[0]?.msg,422));
+    }
+ const haspass = await bcrypt.hash(req.body.password, 12)
+        req.body.password = haspass;
+        req.body.post = [];
+        const result = await userModel.create(req.body);
+        // redis.rpush("userDetails",result);
+       const {clientIp}=get_ip(req);
+        logger.info("USER DETAILS", { obj: ` IP : ${clientIp}` });
+        creatSendToken(result, 201, res);
+})
+
+
+exports.login = catchAsync( async (req, res, next) => {
+    const error = validationResult(req);
+
+    if (!error.isEmpty()) {
+    
+       return next(new appError(error.errors[0]?.msg,422));
+    }
+ const user = await userModel.findOne({ email: req.body.email });
+
+         if(!user || !await bcrypt.compare(req.body.password, user.password)){
+            return next(new appError('Incorrect Email or Password',401));
+         }
+         creatSendToken(user,200,res);
+})
+
+exports.getAllUser = catchAsync( async (req, res, next) => {
+let finaldata;
+    //  finaldata=await redis.lrange('userDetails',0,-1);
+    console.log(finaldata);
+
+    if(finaldata){
+        console.log('inside redis database');
+      res.status(200).json({
+            message: 'success',
+            total:finaldata.length,
+            data:[...finaldata],
+            info:process.pid
+        })
+    }else{
+        console.log('inside database query');
+         let page = req.query.page;
+        let limit = req.query.limit;
+        // try {
+            const data = await userModel.find().skip((page - 1) * limit).limit(limit);
+            if (data) {
+                res.status(200).json({
+                    message: 'success',
+                    total:data.length,
+                    data:data,
+                    info:process.pid
+                })
+            }
+
+    }
+   
+ });
+
+
+exports.deleteUser = catchAsync( async (req, res, next) => {
+    let id = req.params.id;
+    // try {
+        const user = await userModel.findByIdAndDelete(id);
+        if (user) {
+            res.status(200).json({
+                message: 'success',
+                data: "user deleted successfully!!"
+            })
+        }else{
+            return next(new appError('user is not present in database',400));
+        }
+
+})
+
+
+exports.getUserById=catchAsync(async (req,res,next)=>{
+    let id=req.params.id;
+
+    const user=await userModel.findById(id).populate('post');
+    if (user) {
+        res.status(200).json({
+            message: 'success',
+            data:user
+        })
+    }else{
+        return next(new appError('user is not present in database',400));
+    }
+    
+
+});
+
+
+exports.editUser=catchAsync(async(req,res,next)=>{
+    let id=req.params.id;
+    console.log(req.file,"file")
+    // try{
+        if(req.file) req.body.photo=req.file.filename;
+        const user=await userModel.findByIdAndUpdate(id,req.body);
+        if(user){
+            res.status(200).json({
+               message:'user updated succeessfully!!!',
+               data:user
+            });
+        }else{
+           
+            return next(new appError('user is not present in database',400));
+        }
+})
+
+
+exports.forgotPass=catchAsync(async(req,res,next)=>{
+    const email=req.body.email;
+
+    const error = validationResult(req);
+
+    if (!error.isEmpty()) {
+    
+       return next(new appError(error.errors[0]?.msg,422));
+    }
+
+    // try{
+        const user=await userModel.findOne({email:email});
+        if(!user){
+          
+            return next(new appError('user is not present in database',400));
+        }else{
+            crypto.randomBytes(32,async (err,buffer)=>{
+                if(err){
+                   res.status(400).json({
+                    message:'error',
+                    data:err
+                   })
+                    
+                }else{
+                    let token=buffer.toString('hex');
+                    user.resetToken=token;
+                    user.resetTokenExpire=Date.now()+3600000;
+                    user.save();
+                    let url=`visit this url for reset password "http://localhost:3000/api/v1/user/resetPass/${token}"`;
+                    // sendMail(url,user.email,'Reset password ');
+                    await new Email(user, url).sendPassReset();
+                    res.status(200).json({
+                        message:'success',
+                        data:url
+                    })
+                }
+
+            })
+        }
+
+    // }catch(err){
+    //     console.log(err);
+    //     res.status(500).json({
+    //         message: 'error',
+    //         data: err
+    //     }); 
+    // }
+
+})
+
+
+exports.resetPass=catchAsync( async(req,res,next)=>{
+    const token=req.params.token;
+    
+    // try{
+        
+        if(req.body.password !== req.body.cnfpassword){
+            console.log(true)
+            // return res.status(400).json({
+            //     message:'password not match'
+            // })
+            return next(new appError('password not match',400));
+        }
+        
+        let user= await userModel.findOne({resetToken:token,resetTokenExpire:{$gt:Date.now()}});
+        if(!user){
+            // res.status(400).json({
+            //     message:'error',
+            //     data:'user is not present'
+            // })
+            return next(new appError('user is not present in database',400));
+        }else{
+            console.log(user)
+            const pass= await bcrypt.hash(req.body.password,12);
+            console.log(pass,"passss")
+            // const password= await pass;
+                user.password=pass;
+                user.resetToken=null;
+                user.resetTokenExpire=null;
+                user.save();
+                console.log("jghdhhjk")
+                creatSendToken(user,200,res);
+                //  res.status(200).json({
+                //     message:'password reset successfully!!!'
+                // })
+        }
+    //  }catch(err){
+    //     res.status(500).json({
+    //         message: 'error',
+    //         data: err
+    //     }); 
+    // }
+});
+
+let results = [];
+
+exports.createBulkUser= async(req,res,next)=>{
+results=[];
+
+fs.createReadStream(req.file.path)
+        .pipe(csv({}))
+        .on('data', (data) => {
+            console.log(data,"datatatatat")
+            results.push(data);
+
+        })
+        .on('end', async () => {
+         
+            for (let i = 0; i < results.length; i++) {
+                console.log(results[i], "resesd")
+
+                let { status, errMsg } = await createUser(results[i]);
+                if (status) {
+                    if (results.length - 1 == i) {
+                        return res.status(201).send({ message: "all created" })
+                    }
+                } else {
+                    res.status(500).send({ message: errMsg });
+                    break;
+                }
+            }
+
+
+
+        });
+
+
+
+}
+
+exports.restrictTo = (...roles) => {
+    return (req, res, next) => {
+        console.log(req.user)
+        if (!roles.includes(req.user.role)) {
+            return next(new appError('you dont have permission to perform this action', 403));
+        }
+        next()
+    }
+}
+
+async function createUser(info) {
+
+    try {
+        console.log(info,"infoooo")
+        let pass=info.password;
+        info.password= await bcrypt.hash(info.password,12);
+        const query = await userModel.create(info);
+        let msg=`user register successfully !!
+        your username is "${info.email}" and password is "${pass}"
+         plz visit this your for login -> "http://localhost:3000/api/v1/user/login"`;
+        // sendMail(msg,info.email,'Registration Successfully!!!');
+        await new Email(info, msg).sendwelcome();
+        if (query) {
+            return { status: true, errMsg: '' };
+        }
+    } catch (err) {
+        // console.log(err)
+        return { status: false, errMsg: err };
+    }
+
+}
+
+
+
+
+///middleware folder
+
+1)auth.js
+
+const jwt=require('jsonwebtoken');
+const userModel=require('../model/userModel')
+
+exports.token=async(req,res,next)=>{
+  let token;
+  if(req.get('Authorization')){
+    token=req.get('Authorization').split(' ')[1];
+    console.log("token authorization",token)
+
+  }else{
+    return res.status(401).json({
+        message:'plz provide token'
+    })
+  }
+  let  decodeToken;
+  try{
+    console.log("in try")
+    decodeToken=await jwt.verify(token,process.env.JWT_SECRET);
+    console.log(decodeToken,"decodetoken")
+
+    if(!decodeToken){
+        res.status(401).json({
+            message:'not authenticate'
+        })
+      
+      }
+      req.user= await userModel.findOne({_id:decodeToken.id});
+      console.log(req.user,"authuser")
+      next();
+  }catch(err){
+    // console.log(err)
+    // throw err;
+    res.status(401).json({
+        message:'not verify'
+    })
+  }
+
+ 
+// }
+// next('please provide token'); 
+}
+
+
+
+
+
+///////model folder
+
+1)postmodel.js
+
+const { string, required, ref } = require('joi');
+const mongoose=require('mongoose');
+
+const Schema=mongoose.Schema;
+
+
+const feedModel=new Schema({
+    title:{
+        type:String,
+        required:true,
+    },
+    imageUrl:{
+        type:String,
+        required:true
+    },
+    content:{
+            type:String,
+            required:true
+    },
+    creator:{
+        type:Schema.Types.ObjectId,
+       ref:'User',
+       required:true
+    },
+    comments:[
+        {
+        context:{
+            type:String,
+            required:true
+        },
+        userId:{
+            type:Schema.Types.ObjectId,
+            required:true,
+            ref:'User'
+        }
+    }
+    ],
+    reactions:[
+        {
+        react:{
+            type:String,
+            required:true
+        },
+        userId:{
+            type:Schema.Types.ObjectId,
+            required:true,
+            ref:'User'
+        }
+    }
+    ]
+
+},{timestamps:true});
+
+
+module.exports=mongoose.model('Post',feedModel);
+
+
+
+2)templateModel.js
+
+const mongoose=require('mongoose');
+
+const schema=mongoose.Schema;
+
+const template=new schema({
+    username:{
+        type:String,
+        required:true
+    },
+    bot_name:{
+        type:String,
+        required:true
+    },
+    name:{
+        type:String,
+        required:true
+    },
+    variables:{
+        type: [String], // Array of strings
+    
+    },
+    category:{
+        type:String,
+        required:true
+    },
+    status:{
+        type:String,
+        required:true
+    },
+    system_ip:{
+        type:String,
+        required:true
+    },
+    payload:{
+        type:Object
+    }
+
+},{timestamps:true})
+
+
+module.exports=mongoose.model('Template',template)
+
+
+
+
+
+3)userModel.js
+const mongoose=require('mongoose')
+
+const schema=mongoose.Schema;
+
+const User=new schema({
+    email:{
+        type:String,
+        required:true
+    },
+    password:{
+        type:String,
+        required:true
+    },
+    name:{
+        type:String,
+        required:true
+    },
+    photo:{
+        type:String
+    },
+    role:{
+        type:String,
+        required:false
+    },
+    resetToken:{
+        type:String
+    },
+    resetTokenExpire:{
+        type:Date
+    },
+
+    post:[
+        {
+            type:schema.Types.ObjectId,
+            ref:'Post'
+        }
+    ]
+},{timestamps:true});
+
+
+module.exports=mongoose.model('User',User)
+
+
+
+
+////router start here
+
+1)postRouter.js
+                                                                                                                                                                                                                                                                                    const express=require('express');
+
+const router=express.Router();
+
+const postController=require('../controller/postController');
+
+const auth=require('../middleware/auth');
+const {body}=require('express-validator');
+
+
+router.post('/createPost',[body('title').trim().isLength({min:5}).withMessage('plz enter valid data'),body('content').trim().isLength({min:5}).withMessage('plz enter valid data')],auth.token,postController.createPost)
+
+.get('/getAllPost',auth.token,postController.getAllpost)
+
+.get('/singlePost/:id',auth.token,postController.getSinglePost)
+
+.delete('/delete/:id',auth.token,postController.deletePost)
+
+.patch('/updatePost/:id',auth.token,postController.uploadPostImage,postController.updatePost)
+
+
+///comments part routes here
+
+.post('/comment/:id',auth.token,postController.comment)
+
+
+
+
+module.exports=router;
+
+
+
+
+2)templateRouter.js
+
+const express=require('express');
+const templateController=require('../controller/templateController');
+const auth=require('../middleware/auth')
+
+
+const router=express.Router();
+
+router.post('/createTemplate',auth.token,templateController.uploadFile,templateController.createTemplate).get('/getTemplate',auth.token,templateController.getTemplate).delete('/deleteTemplate/:id',auth.token,templateController.deleteTemplate)
+
+module.exports=router;
+
+
+
+
+3)userRouter.js
+const express=require('express');
+const userController=require('../controller/userController');
+const {body}=require('express-validator');
+const userModel=require('../model/userModel');
+
+const router=express.Router();
+
+const auth=require('../middleware/auth')  
+
+// router.get('/samplecall',userController.sampleCall)
+
+router.post('/signUp',[body('email').isEmail().withMessage('plz enter valid email').custom((value,{req,res})=>{
+    return userModel.findOne({email:value}).then(doc=>{
+        if(doc){
+            console.log("dhdhjdhjk")
+            return Promise.reject('User is already Register');
+        }
+    })
+}),body('password').trim().isLength({min:4,max:6}).withMessage('plz enter a valid password'),body('name').trim().notEmpty().withMessage('user name is mandatory'),body('role').trim().notEmpty().withMessage('role is mandotory')],userController.signUp)
+
+.post('/login',[body('email').isEmail().withMessage('plz enter valid email'),body('password').trim().isLength({min:4,max:10}).withMessage('plz enter a valid password')],userController.login)
+
+.get('/getAllUser',auth.token,userController.getAllUser)
+
+.get('/getUserById/:id',auth.token,userController.getUserById)
+
+.delete('/delete/:id',auth.token,userController.deleteUser)
+
+.patch('/editUser/:id',auth.token,userController.uploadPhoto,userController.editUser)
+
+.post('/forgotpass',body('email').isEmail().withMessage('plz enter valid email'),userController.forgotPass)
+
+.post('/resetPass/:token',[body('password').trim().isLength({min:4,max:6}).withMessage('plz enter a valid password'),body('cnfpassword').trim()],userController.resetPass)
+
+
+
+.post('/createBulk',userController.uploadFile,userController.createBulkUser)
+
+
+
+module.exports=router;
+
+
+////util folder start here
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+1.appError.js
+                                                                                                                                                                                                                                                                                                                                                                          
+ class AppError extends Error {
+    constructor(message, statusCode) {
+        super(message);
+        this.statusCode = statusCode;
+        this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
+        this.isOperational = true;
+        Error.captureStackTrace(this, this.constructor);
+    }
+}
+
+module.exports = AppError
+                                                                                                                                                                                                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                                                                                                          
+2.catchAsync.js                                                                                                                                                                                                                                                                                                                                                                          
+                                                                                                                                                                                                                                                                                                                                                                          
+module.exports = fn => {
+    return (req, res, next) => {
+
+        fn(req, res, next).catch(next)
+    }
+}
+
+
+3.email.js
+
+const nodemailer = require('nodemailer');
+
+module.exports = class Email {
+    constructor(user, url) {
+        this.to = user.email,
+            this.name = user.name,
+            this.url = url,
+            this.from = process.env.EMAIL_FROM
+    }
+
+    newcreateTransport() {
+        if (process.env.NODE_ENV == 'production') {
+
+            //sendgrid
+            return 1;
+        }
+
+        return nodemailer.createTransport({
+            host: process.env.EMAIL_HOST,
+            port: process.env.EMAIL_PORT,
+            secure: false,
+            auth: {
+                user: process.env.EMAIL_USERNAME,
+                pass: process.env.EMAIL_PASS
+            }
+        })
+
+
+
+
+    }
+
+
+    async send(template, subject) {
+
+
+
+        const mailOption = {
+            from: `"Maddison Foo Koch 👻" <${this.from}>`,
+            to: this.to,
+            subject: subject,
+            text: this.url
+        }
+
+        this.newcreateTransport();
+        await this.newcreateTransport().sendMail(mailOption)
+
+    }
+
+    async sendwelcome() {
+        await this.send('welcome', 'Register complete');
+    }
+
+
+    async sendPassReset() {
+        await this.send('Password Reset', 'your password reset token will be expire in 10 minute!')
+    }
+
+  
+
+
+}
+
+
+
+// module.exports = sendmail;
+
+
+4.redisconnection.js
+
+// const redis = require('redis');
+
+// client = redis.createClient();
+
+// client.on('connect', () => {
+//     console.log('redis connected')
+// })
+
+// client.on('error', (err) => {
+//     console.log('something went wrong' + err)
+// });
+
+
+
+const redis=require('ioredis');
+
+const client=new redis();
+
+module.exports = client;
+
+
+
+5.winston.js
+                                                                                                                                                                                                                                                                                                                                                                                                                
+ var appRoot = require('app-root-path');
+const { createLogger, format, transports } = require('winston');
+const { combine, timestamp, printf } = format;
+
+const myFormat = printf(info => {
+  let message = `\n\n ${info.timestamp} | ${info.level} | ${info.message}`;
+  message = info.obj ? message + ` | Data:${JSON.stringify(info.obj)} ` : message
+  return message;
+});
+
+const logger = createLogger({
+  format: combine(
+    timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    myFormat
+  ),
+  transports: [
+    new transports.File({
+      filename: `${appRoot}/logs/TemplateLogger.${('0' + (new Date().getMonth() + 1)).slice(-2)}`, 
+      level: 'info'
+    }),
+  ],
+  exitOnError: false,
+})
+
+
+module.exports = logger;                                                                                                                                                                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                                                                                                                                                                
+                                                                                                                                                                                                                                                                                                                                                                                                                
+                                                                                                                                                                                                                                                                                                                                                                                                                
+  ////app.js code start                                                                                                                                                                                                                                                                                                                                                                                                              
+
+const express = require('express');
+const bodyparser = require('body-parser');
+
+//router here
+const userRouter=require('./router/userRouter');
+const templateRouter=require('./router/templateRouter');
+const postRouter=require('./router/postRouter');
+
+
+
+const AppErr = require('./util/appError');
+const errorController = require('./controller/errorController')
+const mongoose = require('mongoose');
+const logger=require('./util/winston')
+const morgan=require('morgan')
+let winston = require('winston');
+const app = express();
+const path=require('path');
+const appRoot = require('app-root-path');
+const DailyRotateFile = require("winston-daily-rotate-file");
+var expressWinston = require('express-winston');
+const ratelimit=require('express-rate-limit');
+const helmet=require('helmet');
+
+const xss = require('xss-clean')
+
+app.use(bodyparser.json());//parsing incoming request body
+
+// url = "mongodb://localhost:27017/userCreation";
+
+///this code is used for cors handling in project
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    next();
+});
+
+
+
+//limiter api access
+
+const limiter = ratelimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	limit: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes).
+  message:'Too many requests from this IP, please try again in an 15 minutes!'
+})
+
+app.use(limiter);
+app.use(helmet());
+app.use(xss())
+
+app.use('/img',express.static(path.join(__dirname,'img')));
+
+//for template logger
+const templateInfo = new winston.transports.DailyRotateFile({
+    level: 'warn',
+    handleExceptions: false,
+    json: true,
+    // maxsize: 2 * 15, // no need of fileSize here , now requirement is duration wise
+    maxFiles: 6,     // new: requirement to keep 5 zip and  1 fresh file for logs  //old: cuz 1 is older zip and 1 is newly ceated file by winston 
+    colorize: false,
+    dirname: `${appRoot}/logs/`,
+    filename: 'TemplateLogger',
+    zippedArchive: true,
+    datePattern: "MM"      // for month wise reports 
+  })
+  
+  
+  app.use(expressWinston.logger({
+    transports: [
+      templateInfo,
+    ],
+    expressFormat: false,
+    meta: false,
+    format: false
+  }))
+
+app.use('/api/v1/user',userRouter);
+app.use('/api/v1/template',templateRouter);
+app.use('/api/v1/post',postRouter);
+
+app.all('*', (req, res, next) => {
+    next(new AppErr(`cant find ${req.originalUrl} on server`, 404));
+});
+
+app.use(errorController)
+module.exports=app;
+
+
+
+
+///config.env
+
+NODE_ENV=development
+
+
+///config.json
+
+{
+    "development": {
+        "NODE_ENV": "development",
+        "USERNAME": "adinath",
+        "PASSWORD": 1234,
+        "PORT": 3000,
+        "DATABASE_LOCAL": "mongodb://localhost:27017/userCreation",
+        "JWT_SECRET": "gshjshskjsshjsashashajshskjahsajshaskhsjshskjshkjashkshkjshs",
+        "JWT_EXPIRED": "90d",
+        "JWT_COOKIE_EXPIRES": 90,
+        "EMAIL_USERNAME": "cali.fritsch@ethereal.email",
+        "EMAIL_PASS": "N4Q2WP6cqB41BMFEWj",
+        "EMAIL_HOST": "smtp.ethereal.email",
+        "EMAIL_PORT": 587,
+        "EMAIL_FROM": "kadamadinath31@gmail.com"
+    },
+    "production": {
+        "NODE_ENV": "production",
+        "USERNAME": "adinath",
+        "PASSWORD": 1234,
+        "PORT": 3000,
+        "DATABASE_LOCAL": "mongodb://localhost:27017/userCreation",
+        "JWT_SECRET": "gshjshskjsshjsashashajshskjahsajshaskhsjshskjshkjashkshkjshs",
+        "JWT_EXPIRED": "90d",
+        "JWT_COOKIE_EXPIRES": 90,
+        "EMAIL_USERNAME": "ff4ebc7d1602f8",
+        "EMAIL_PASS": "50cfd567108e66",
+        "EMAIL_HOST": "smtp.mailtrap.io",
+        "EMAIL_PORT": 25,
+        "EMAIL_FROM": "kadamadinath31@gmail.com"
+    }
+}
+
+
+
+
+////docker file
+FROM node:slim
+WORKDIR /app
+COPY . /app
+RUN npm install
+EXPOSE 4000
+CMD node server.js
+
+
+
+///package.json
+
+{
+  "name": "createuserproject",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start:dev": "nodemon server.js",
+    "start:prod": "NODE_ENV=production nodemon server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "app-root-path": "^3.1.0",
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.20.3",
+    "csv-parser": "^3.1.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-validator": "^7.2.0",
+    "express-winston": "^4.2.0",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.6.0",
+    "ipware": "^2.0.0",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.1",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.16",
+    "pm2": "^5.4.3",
+    "redis": "^4.7.0",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "xss-clean": "^0.1.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
+
+
+////server.js
+
+// const dotenv = require('dotenv');
+const config = require('./config.json');
+const cluster = require('cluster');
+const os=require('os');
+const totalcpu=os.cpus().length;
+const ENV = process.env.NODE_ENV || 'development';
+const configData = config[ENV];
+for (const property in configData) {
+    process.env[property] = configData[property]
+}
+const mongoose = require('mongoose');
+
+
+
+// const redis=require('ioredis');
+
+// const client=new redis();
+
+process.on('uncaughtException', err => {
+    console.log('uncaught exception ', err);
+    process.exit(1)
+
+});
+
+
+ 
+
+
+// dotenv.config({ path: './config.env' });
+const app = require('./app');
+let server;
+
+
+console.log(cluster.isPrimary);
+if(cluster.isPrimary){
+
+    for (let i = 0; i < totalcpu; i++) {
+        cluster.fork();
+      }
+    
+      cluster.on('exit', (worker, code, signal) => {
+        console.log(`worker ${worker.process.pid} died`);
+      });
+}else{
+    
+    mongoose.set('strictQuery', true)//ignore unwanted field from request body that not present in schema
+    mongoose.connect(process.env.DATABASE_LOCAL).then(async(con) => {
+        console.log('database connected successfully!')
+        // const result=await client.get('user:3');
+        // console.log(result);
+        
+
+        //redis server connect here
+        
+        server = app.listen(process.env.PORT, () => {
+            console.log(`server is running ${process.env.PORT}`);
+            console.log(totalcpu);
+            
+        });
+    });
+
+}
+
+// mongoose.set('strictQuery', true)//ignore unwanted field from request body that not present in schema
+//     mongoose.connect(process.env.DATABASE_LOCAL).then(con => {
+//         console.log('database connected successfully!')
+        
+//         server = app.listen(process.env.PORT, () => {
+//             console.log(`server is running ${process.env.PORT}`);
+//             console.log(totalcpu);
+            
+//         });
+//     });
+
+
+
+process.on('unhandledRejection', err => {
+    console.log(err.name, err.message);
+    server.close(() => {
+        process.exit(1)
+
+    });
+});
+
+
+
+
+
+
+
+
