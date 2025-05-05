@@ -1,0 +1,942 @@
+/////controller folder 
+
+
+1.shopcontroller.js
+
+const express = require('express');
+const shopmodel=require('../model/shopModel');
+const orderModel=require('../model/orderModel')
+const {validationResult}=require('express-validator');
+// const userModel=require('../model/userModel');
+// const { overwriteMiddlewareResult } = require('mongoose');
+// const bcrypt=require('bcryptjs')
+
+const limit=3;
+
+
+exports.samplecall = (req, res, next) => {
+
+    console.log('sample function is called here');
+    res.send('sample function is called here')
+    // next();
+
+
+}
+
+
+// exports.addProduct = (req, res, next) => {
+//     const sample=new shopmodel();
+//     sample.save().then(result=>{
+//         // console.log(result);
+//         res.send('post api called')
+        
+//     }).catch(err=>{
+//         console.log(err);
+//         res.send(err)
+//     });
+   
+
+// }
+
+
+//using mongoose
+exports.addProduct=(req,res,next)=>{
+    console.log(req.body);
+    // req.body.userId=req.user._id;
+    req.body.userId=req.user._id;
+    const errors=validationResult(req);
+
+    if(!errors.isEmpty()){
+      return  res.status(422).send(errors)
+    }
+
+    const product= shopmodel.create(req.body).then(result=>{
+        // res.send(result);
+        res.status(201).json({
+            message:'success',
+            data:'product added successfully'
+        })
+    }).catch(err=>{
+        // res.status(500).send(err)
+        // throw new Error(err);
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+   
+
+}
+
+
+exports.getAllProduct=(req,res,next)=>{
+    let page=req.query.page || 1;
+    console.log(page)
+    shopmodel.find().skip((page - 1) * limit).limit(limit)
+    // .select('title price -_id')
+    // .populate('userId','name email')
+    .populate('userId')///use kel aahe user object expand karnyasathi
+    .then(result=>{
+        res.status(200).json({
+            message:'success',
+            data:result
+        })
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+exports.getProductByID=(req,res,next)=>{
+    // console.log(req.query.id)
+    const id=req.query.id;
+    shopmodel.findById(id).then(result=>{
+        // res.send(result)
+        res.status(200).json({
+            message:'success',
+            data:result
+        })
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+
+exports.updateProduct=(req,res,next)=>{
+    const id=req.query.id;
+    const body=req.body
+    shopmodel.findByIdAndUpdate(id,body).then(result=>{
+        res.send('product updated successfully!')
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+exports.deleteProduct=(req,res,next)=>{
+    const id=req.query.id;
+    console.log(id,"iddd");
+    
+    shopmodel.findByIdAndDelete(id).then(result=>{
+        res.send('deleted product successfully!')
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+/////cart part from here
+
+exports.addProductCart=(req,res,next)=>{
+    let product;
+    console.log(req.query.id,"add prodyc");
+    prodId=req.query.id;
+   shopmodel.findById(prodId).then(result=>{
+        return result;
+    }).then(response=>{
+        // console.log(response);
+        product=response;
+        // return req.user.addToCart(response)
+        return req.user.addToCart(response)
+
+        
+    }).then(res1=>{
+        res.status(201).send('product add to card successfulyy!')
+    }).catch(err=>{
+        // console.log(err);
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+        
+    })
+
+
+
+    // console.log(product);
+    
+   
+    
+}
+
+
+exports.getCartProduct=(req,res,next)=>{
+    req.user.populate('cart.items').then(result=>{
+        res.send(result.cart.items)
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+exports.deleteCartItem=(req,res,next)=>{
+    const id=req.query.id;
+    req.user.removeFromCart(id).then(result=>{
+        res.send('product removed')
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+
+///order related logic here
+
+exports.createOrder=(req,res,next)=>{
+let product;
+    req.user.populate('cart.items').then(result=>{
+        // res.send(result.cart.items);
+        product=result.cart.items.map(ele=>{
+            return {
+                quantity:ele.quantity,
+                product:ele.prodID
+            }
+        })
+        const order=new orderModel({
+            user:{
+                email:req.user.email,
+                userId:req.user
+            },
+            products:product
+        })
+       return order.save();
+    }).then(result=>{
+        req.user.clearCart();
+        res.send('order place successfullyyy!')
+    }).catch(err=>{
+        // res.send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+
+
+
+
+}
+
+
+exports.getOrders=(req,res,next)=>{
+    console.log(req.session.isLogin); 
+    
+    orderModel.find({'user.userId':req.user._id}).then(result=>{
+        console.log(result);
+        res.status(200).send(result)
+        
+    }).catch(err=>{
+        // res.status(400).send(err)
+        const error=new Error(err);
+        error.httpStatusCode=500;
+        return next(error);
+    })
+}
+
+
+2.usercontroller.js
+
+const userModel = require('../model/userModel')
+
+const bcrypt = require('bcryptjs');
+const crypto=require('crypto')
+
+const nodemailer=require('nodemailer');
+const sendgridtransport=require('nodemailer-sendgrid-transport');
+const {validationResult}=require('express-validator')
+const fs=require('fs');
+
+const pdfDoc=require('pdfkit')
+// const path=require('./')
+////login
+
+
+const transportor=nodemailer.createTransport(sendgridtransport({
+    auth:{
+        api_user:'',
+        api_key:''
+    }
+}))
+
+exports.login = (req, res, next) => {
+    console.log('login ');
+    // res.setHeader('set-Cookie','loggedIn=true;Max-Age=10;secure')
+    // req.session.isLogin=true;
+    // req.isLogin=true;
+
+    userModel.findOne({ email: req.body.email }).then(result => {
+
+        // req.user=result;
+        if (result) {
+            console.log(result.pass, req.query.pass)
+            bcrypt.compare(req.body.pass, result.pass).then(match => {
+                console.log(match, "gdgdg");
+                if (match) {
+                    req.session.isLogin = true;
+
+                    req.session.user = result;
+                    req.session.save()
+                    console.log(req.session);
+
+                    res.send('session stored')
+
+                } else {
+                    res.send('pass not match')
+                }
+
+            }).catch(err => {
+                res.send(err)
+            })
+
+        } else {
+            res.send('user is not present')
+        }
+    }).catch(err => {
+        console.log(err);
+        res.send(err)
+
+    })
+
+}
+
+
+exports.logout = (req, res, next) => {
+    req.session.destroy(err => {
+        console.log(err);
+        res.send('session end')
+    })
+
+}
+
+
+
+exports.signUp = (req, res, next) => {
+    const email = req.body.email;
+    const pass = req.body.password;
+    const confirmpass = req.body.confimpass;
+    const error=validationResult(req);
+    if(!error.isEmpty()){
+        return res.status(422).send(error.array()[0].msg)
+    }
+    console.log('insignup')
+    let final;
+     userModel.findOne({ email: email }).then(result => {
+        console.log(result,"userdata");
+        final=result;
+       
+    }).catch(err => {
+        console.log(err);
+
+    })
+    // console.log(final,"yghgdhdghg")
+
+    if (final) {
+        return res.send('user already registerd')
+    }
+    else {
+        return bcrypt.hash(pass, 12).then(has => {
+
+            let obj = {
+                email: email,
+                pass: has,
+
+                cart: { items: [] }
+            }
+            console.log("else block");
+
+            userModel.create(obj).then(result => {
+                console.log(result, "hghshjh")
+
+                res.status(201).send('register success');
+            }).catch(err => {
+                console.log(err);
+                res.send(err)
+
+            })
+        })
+    }
+
+
+}
+
+exports.resetPassRoute=(req,res,next)=>{
+
+    crypto.randomBytes(32,(err,buffer)=>{
+        if(err){
+            console.log(err);
+            res.send(err)
+            
+        }
+        let token=buffer.toString('hex');
+        userModel.findOne({email:req.body.email}).then(user=>{
+            console.log(user);
+            if(!user){
+             return  res.send('no account with this user')
+            }else{
+                user.resetToken=token;
+                user.resetTokenExpire=Date.now()+3600000;
+               return user.save();
+            }
+            
+        }).then(suc=>{
+            transportor.sendMail({
+                to:req.body.email,
+                from:'abc@gmail.com',
+                subject:'this is reset password mail',
+                html:`<a href="http://localhost:5000/user/reset/${token}">link</a>`
+            })
+        }).catch(err=>{
+            console.log(err);
+            res.send(err);
+            
+        })
+    })
+}
+
+
+exports.resetPass=(req,res,next)=>{
+    const token=req.params.token;
+    let resetuser;
+    userModel.findOne({resetToken:token,resetTokenExpire:{$gt:Date.now()}}).then(result=>{
+        console.log(result);
+        resetuser=result;
+       return bcrypt.hash(req.body.pass,12).then(has=>{
+        resetuser.pass=has;
+        resetuser.resetToken=null;
+        resetuser.resetTokenExpire=null;
+       return resetuser.save();
+        
+
+       }).then(respponse=>{
+        res.send('password reset successfuly')
+       }).catch(err=>{
+        console.log(err);
+        
+       })
+        
+    }).catch(err=>{
+        console.log(err);
+        res.send(err)
+        
+    })
+}
+
+
+/////file upload part from here
+exports.fileupload=(req,res,next)=>{
+    console.log("file upload call",req.file);
+    
+    next();
+}
+
+
+exports.downloadFile=(req,res,next)=>{
+    console.log('download function called');
+   
+///download logic for small file data
+    // fs.readFile('invoice/javascript note.txt',(err,data)=>{
+    //         if(err){
+    //             next(err)
+    //         }else{
+    //             res.setHeader('Content-Type','application/pdf');
+    //             res.send(data)
+    //         }
+    // })
+    
+
+    ///create pdf file
+
+    const pdf=new pdfDoc();
+   let samp=fs.createWriteStream('invoice/javascript note.txt')
+    pdf.pipe(samp);
+    pdf.pipe(res);
+    pdf.text('hello word');
+    pdf.end();
+
+     ///download for large file data
+    // const file=fs.createReadStream('invoice/javascript note.txt')
+    // res.setHeader('Content-Type','application/pdf');
+    // file.pipe(res)
+    //res.send(data)
+    
+}
+
+
+
+///middleware  folder
+
+1.auth.js
+
+module.exports=(req,res,next)=>{
+    if(!req.session.isLogin){
+        res.send('session is expired')
+    }
+    next();
+}
+
+
+
+///model folder 
+
+
+1.ordermodel.js
+const mongoose=require('mongoose')
+
+
+// const schema=mongoose.Schema;
+
+
+const order=new mongoose.Schema({
+
+    products:[
+        {
+            product:{
+                type:Object,
+                required:true,
+                ref:'product'
+            },
+            quantity:{
+                type:Number,
+                required:true
+            }
+        }
+    ],
+    user:{
+        email:{
+            type:String,
+            required:true
+        },
+        userId:{
+            type:mongoose.Schema.Types.ObjectId,
+            required:true,
+            ref:'User'
+        }
+    }
+
+})
+
+
+module.exports=mongoose.model('Order',order)
+
+
+
+2.shopmodel.js
+
+
+// const getDB=require('../util/database').getDB;
+
+
+
+// class Product{
+//     constructor(title,price,description,imageUrl){
+//         this.title=title;
+//         this.price=price;
+//         this.description=description;
+//         this.imageUrl=imageUrl;
+//     }
+
+
+//     save(){
+//         const db=getDB();
+//        return db.collection('products').insertOne({name:'abc',price:100,description:'this is a description',imageUrl:'https://www.google.com'}).then(result=>{
+//             // console.log(result);
+            
+//         }).catch(err=>{
+//             console.log(err);
+            
+//         })
+//     }
+// }
+
+// module.exports=Product
+
+
+const mongoose=require('mongoose');
+
+const schema=mongoose.Schema;
+
+const product=new schema({
+    title:{
+        type:String,
+        required:true
+    },
+    price:{
+        type:Number,
+        required:true
+    },
+    description:{
+        type:String,
+        required:true
+    },
+    imageUrl:{
+        type:String,
+        required:true
+    },
+    userId:{
+        type:schema.Types.ObjectId,
+        ref:'User',
+        required:true
+    }
+
+})
+
+
+module.exports=mongoose.model('product',product)
+
+3.userModel.js
+
+const mongoose=require('mongoose');
+
+const schema=mongoose.Schema;
+
+const User=new schema({
+  
+    email:{
+        type:String,
+        required:true 
+    },
+    pass:{
+        type:String,
+        required:true
+    },
+    confirmpass:{
+        type:String,
+        
+    },
+    resetToken:{
+        type:String
+    },
+    resetTokenExpire:{
+        type:Date
+    },
+    
+    cart:{
+        items:[
+            {
+                prodID:{type:schema.Types.ObjectId,required:true,ref:'product'},
+                quantity:{
+                    type:Number,
+                    required:true
+                }
+            }
+        ]
+    }
+
+})
+
+User.methods.addToCart=function (product){
+    const cardProductIndex=this.cart.items.findIndex(cp=>{
+        return cp.prodID.toString()===product._id.toString()
+    });
+
+let newQty=1;
+const updatedCartItems=[...this.cart.items];
+
+if(cardProductIndex >=0){
+    // newQty=this.cart.items[cardProductIndex].quantity + 1; 
+    updatedCartItems[cardProductIndex].quantity=updatedCartItems[cardProductIndex].quantity + 1;
+}else{
+    updatedCartItems.push({
+        prodID:product._id,
+        quantity:newQty
+    })
+}
+this.cart.items=updatedCartItems;
+return this.save();
+
+}
+
+
+User.methods.removeFromCart=function(product){
+    const cardProduct=this.cart.items.filter(cp=>{
+        return cp.prodID.toString()!==product.toString()
+    });
+    this.cart.items=cardProduct;
+    return this.save()
+}
+
+User.methods.clearCart=function (){
+    this.cart.items=[];
+    return this.save();
+}
+
+module.exports=mongoose.model('User',User);
+
+
+///router folder code here
+
+1.shoprouter.js
+
+const express=require('express');
+
+const router=express.Router();
+
+const shopController=require('../controller/shopcontroller')
+
+const authmiddleware=require('../middleware/auth')
+const {check,body}=require('express-validator')
+
+router.post('/addProduct',[body('title').isAlphanumeric().isLength({min:3}).trim(),body('imageUrl').isURL(),body('price').isFloat(),body('description').isLength({min:5,max:400}).trim()],authmiddleware,shopController.addProduct).get('/getAllProduct',shopController.getAllProduct).get('/findById',shopController.getProductByID).patch('/updateProduct',shopController.updateProduct).delete('/deleteProduct',shopController.deleteProduct)
+.post('/addProductCart',shopController.addProductCart).get('/getCartDetails',shopController.getCartProduct).delete('/deleteCartItem',shopController.deleteCartItem)
+.post('/createOrder',shopController.createOrder).get('/getOrders',authmiddleware,shopController.getOrders)
+
+
+
+
+
+
+///session and cookies
+
+
+module.exports=router;
+
+
+
+2.userRouter.js
+
+const express=require('express');
+
+const router=express.Router();
+
+const userController=require('../controller/userController');
+
+const {check,body}=require('express-validator')
+
+
+router.post('/signUp',[check('email').isEmail().withMessage('plz enter valid email'),body('password').isLength({min:5,max:10}).withMessage('password length should be greater than 5').trim(),body('confirmpass').custom((value,{req})=>{
+    if(value !==req.body.password){
+        throw new Error('pass not match')
+        
+        
+    }
+    return true;
+})],userController.signUp).post('/login',userController.login).post('/logout',userController.logout)
+
+
+.post('/fileUpload',userController.fileupload).get('/downloadfile',userController.downloadFile)
+
+
+module.exports=router;
+
+
+
+////util folder start here
+
+1.databse.js
+
+const mongo=require('mongodb')
+const mongoClient=mongo.MongoClient;
+
+let _db;
+
+// exports.mongoConnect=(callback)=>{
+//     mongoClient.connect('mongodb://localhost:27017').then(res=>{
+//         console.log('database connected successfully!!!');
+//         _db=res.db();
+//         callback(res)
+//     }).catch(err=>{
+//         console.log(err);
+        
+//     })
+
+// }
+
+
+// exports.getDB=()=>{
+//     if(_db){
+//         return _db;
+//     }
+//     throw 'no database found'
+// }
+
+
+
+
+///app code here
+
+app.js
+
+const express=require('express');
+const bodyparser=require('body-parser');
+// const mongoDB=require('./util/database');
+const mongoose=require('mongoose');
+
+const shoprouter=require('./router/shoprouter');
+const userRouter=require('./router/userRouter');
+
+const userModel=require('./model/userModel');
+
+const csrf=require('csurf');
+
+const url='mongodb://localhost:27017';
+
+const session=require('express-session');
+
+const multer=require('multer')
+
+const mongoDbstore=require('connect-mongodb-session')(session)
+
+const store=new mongoDbstore({
+    uri:url,
+    collection:'sessions'
+})
+
+const csrfprotection=csrf()
+
+const app=express();
+
+
+let port =5000;
+app.use(session({secret:'my secret',resave:false,saveUninitialized:false,store:store}))
+
+// app.use(csrfprotection)
+
+
+
+app.use((req,res,next)=>{
+    
+    if(req.session.user){
+
+        userModel.findById(req.session.user._id).then(result=>{
+                if(!result){
+                    return next()
+                }
+                   req.user=result;
+                   next();
+           }).catch(err=>{
+               console.log(err);
+               next( new Error(err))
+                
+               
+           }) 
+    }else{
+        console.log("else part here");
+        
+        next();
+    }
+   
+    
+});
+
+
+const fileStorage=multer.diskStorage({
+    destination:(req,file,cb)=>{
+        cb(null,'fileFolder');
+    },
+    filename:(req,file,cb)=>{
+        cb(null,'sample.txt');
+    }
+});
+
+
+const fileFilters=(req,file,cb)=>{
+    console.log(file);
+    
+    if(file.mimetype === 'text/plain'){
+        cb(null,true)
+    }else{
+        cb(null,false);
+    }
+}
+
+app.use(express.json()) 
+
+app.use(bodyparser.json());
+app.use(multer({storage:fileStorage,fileFilter:fileFilters}).single('file'))
+
+app.use('/shop',shoprouter);
+app.use('/user',userRouter);
+
+///using mongoose database connection
+mongoose.connect(url).then(result=>{
+    if(result) console.log('database connected successfully!');
+    
+//    const userdata= userModel.find().then(result=>{
+//         return result;
+//     }).catch(err=>{
+//         console.log(err);
+        
+//     })
+
+//     if(!userdata){
+//  const user=new userModel({
+//             name:'adinath',
+//             email:'kadamadinath31@mail.com',
+//             cart:{
+//                 items:[]
+//             }
+//         })
+//         user.save();
+//     }
+
+    app.listen(port,()=>{
+        console.log('server is connected'); 
+        
+    })
+}).catch(err=>{
+    console.log(err);
+    
+})
+
+// mongoDB.mongoConnect((connect)=>{
+//     // console.log(connect); 
+    
+//     app.listen(port,()=>{
+//         console.log('server is connected');
+        
+//     })
+    
+// })
+
+
+/////package.json here
+
+
+{
+  "name": "mongo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon app.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.20.3",
+    "connect-mongodb-session": "^5.0.0",
+    "csurf": "^1.11.0",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1",
+    "express-validator": "^7.2.0",
+    "mongodb": "^6.11.0",
+    "mongoose": "^8.8.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.16",
+    "nodemailer-sendgrid-transport": "^0.2.0",
+    "pdfkit": "^0.15.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
+
+
+
+
