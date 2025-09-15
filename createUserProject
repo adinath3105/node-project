@@ -1,8 +1,10 @@
-*createuserproject
+create user node project 
+
+controller folder
 
 1)errorcontroller.js
 
-  const AppError = require('../util/appError');
+const AppError = require('../util/appError');
 
 
 const handleCastError = err => {
@@ -69,8 +71,53 @@ module.exports = (err, req, res, next) => {
 }
 
 
-2)postController.js
 
+2)notificationcontroller.js
+
+const { validationResult } = require('express-validator');
+const catchAsync=require('../util/catchAsync');
+
+const appError = require('../util/appError');
+
+const notificationModel=require('../model/notificationModel');
+
+
+exports.getNotification=catchAsync(async (req,res,next)=>{
+
+const data=await notificationModel.find({receiver:req.user.id}).populate('sender').populate('post').sort({createdAt:-1});
+         if(data.length){
+             res.status(200).json({
+                    message: 'success',
+                    total:data.length,
+                    data:data,
+                    info:process.pid
+                })
+    }else{
+       return next(new appError('no data found!!', 400));
+    }
+
+
+});
+
+
+exports.markAsRead=catchAsync(async (req,res,next)=>{
+                 let id = req.params.id;
+        const notification=await notificationModel.findByIdAndUpdate(id,{ isRead: true });
+        if (notification) {
+        res.status(200).json({
+            message: 'notification read',
+            data: notification
+        });
+    } else {
+        return next(new appError('notification is not present in database', 400));
+    }
+
+
+});
+
+
+
+3)postcontroller.js
 
 
 const postModel = require('../model/postModel');
@@ -83,6 +130,8 @@ const { validationResult } = require('express-validator');
 
 const appError = require('../util/appError');
 const catchAsync = require('../util/catchAsync');
+
+const notificationModel=require('../model/notificationModel');
 
 
 exports.createPost = catchAsync(async (req, res, next) => {
@@ -115,9 +164,49 @@ exports.createPost = catchAsync(async (req, res, next) => {
 
 exports.getAllpost = catchAsync(async (req, res, next) => {
 
-    let postList = await postModel.find();
+    console.log(req.query.isOwnProfile,"req ownprofile",req.query.searchPost)
+    console.log(req.user,"from get all post");
+let postList;
+let tag ;
+if(req.query.searchPost){
 
-    if (!postList) {
+   tag = req.query.searchPost.toLowerCase();
+}
+    if(req.query.isOwnProfile === 'true'){
+        //   postList= await postModel.find({creator:req.user.id},{content:{ $regex :`/#${req.query.searchPost}\b/i`}});
+
+                 let query = { creator: req.user.id };
+
+                if (tag) {
+                     query.content = { $regex: new RegExp(`#${tag}\\b`, 'i') };
+                    }
+                 postList = await postModel.find(query);
+        //     postList = await postModel.find({
+        //     creator: req.user.id,
+        //     content: { $regex: new RegExp(`#${tag}\\b`, 'i') }
+        // });
+    }else{
+
+        let query={
+            $or: [
+       { visibility: "public" },
+       { 
+         visibility: "private", 
+         creator: { $in: [...req.user.following,req.user.id] }  // followedUsers = array of userIds whom current user follows
+       }
+     ]
+       };
+
+        if (tag) {
+                     query.content = { $regex: new RegExp(`#${tag}\\b`, 'i') };
+                    }
+
+
+        // postList = await postModel.find();
+         postList = await postModel.find(query);
+        
+    }
+  if (!postList) {
         return next(new appError('no data found!!', 400));
     } else {
         res.status(200).json({
@@ -196,8 +285,27 @@ exports.comment = catchAsync(async (req, res, next) => {
     } else {
         req.body.userId = req.user.id;
         console.log(postDetails[0].comments, "request body");
-      req.body.context ? postDetails[0].comments.push(req.body) : postDetails[0].reactions.push(req.body)
+        
+      if(req.body.context) { 
+        postDetails[0].comments.push(req.body) 
+    }
+      else{
+        console.log("into else part");
+        
+        
+         postDetails[0].reactions.push(req.body)
+        };
         postDetails[0].save();
+        if(postDetails[0].creator !== req.user.id){
+            console.log("hiijdhjdhsdhskdjshdjhjhdsjdh")
+            await notificationModel.create({
+                 sender: req.user.id,
+            receiver: postDetails[0].creator,
+            type: req.body.context ? 'comment' : 'like',
+            post: postDetails[0]._id,
+            })
+        }
+         console.log(postDetails,"postdetails")
         res.status(201).json({
             message: 'success',
             data: `${req.body.context ? 'Commented' : 'Like'} on post successfully!!!`
@@ -238,11 +346,54 @@ const upload = multer({
 exports.uploadPostImage = upload.single('postImage');
 
 
+4)storycontroller.js
+
+const storyModel=require('../model/storyModel');
+const { validationResult } = require('express-validator');
+const catchAsync=require('../util/catchAsync');
+
+const appError = require('../util/appError');
+
+
+exports.createStory=catchAsync(async (req,res,next)=>{
+      const error = validationResult(req);
+        if (!error.isEmpty()) {
+              // console.log("hiiiii",error.errors[0]?.msg)
+              return next(new appError(error.errors[0]?.msg, 422));
+          }
+           req.body.userId = req.user.id;
+           req.body.expiresAt= new Date(Date.now() + 24 * 60 * 60 * 1000);
+           req.body.mediaUrl=req.file.path;
+           const story=await storyModel.create(req.body);
+          if (story) {
+                  res.status(201).json({
+                      message: 'story uploaded !!!',
+                      data: story
+                  });
+              } else {
+                  return next(new appError('something went wrong', 400));
+              }
+})
+
+
+exports.getAllStory=catchAsync(async (req,res,next)=>{
+
+    const data= await storyModel.find({ expiresAt: { $gt: new Date() } }).populate('userId')
+    if(data){
+             res.status(200).json({
+                    message: 'success',
+                    total:data.length,
+                    data:data,
+                    info:process.pid
+                })
+    }
+
+})
 
 
 
 
-3)templateController.js
+5)templatecontroller.js
 
 const templateModel=require('../model/templateModel');
 
@@ -534,10 +685,7 @@ exports.deleteTemplate=catchAsync(async(req,res,next)=>{
 })
 
 
-
-
-
-4)userController.js
+6)usercontroller.js
 
 const userModel = require('../model/userModel');
 
@@ -546,23 +694,26 @@ const { validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
 
 const jwt = require('jsonwebtoken')
-const crypto=require('crypto');
+const crypto = require('crypto');
 
-const multer=require('multer');
+const multer = require('multer');
 
-const fs=require('fs')
+const fs = require('fs')
 const csv = require('csv-parser');
-const appError=require('../util/appError');
+const appError = require('../util/appError');
 const get_ip = require('ipware')().get_ip;
 
 const nodemailer = require("nodemailer");
 
-const catchAsync=require('../util/catchAsync');
+const catchAsync = require('../util/catchAsync');
 
-const Email=require('../util/email');
+const Email = require('../util/email');
 
-const logger=require('../util/winston');
+const logger = require('../util/winston');
+const twilio = require('twilio');
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
+const auth=require('../util/auth');
 
 // const redis=require('../util/redisconnection');
 
@@ -627,28 +778,28 @@ exports.uploadFile = uploadFile.single('myFile');
 
 
 
-const creatSendToken = (user, status, res) => {
-    // console.log(res);
-    const token = signToken(user._id, user.name);
-    // res.cookie('jwt', token, cookieOption)
+// const creatSendToken = (user, status, res) => {
+//     // console.log(res);
+//     const token = signToken(user._id, user.name);
+//     // res.cookie('jwt', token, cookieOption)
 
-    //remove the password form the output
-    // user.password = undefined;
-    // user.cnfpassword = undefined;
+//     //remove the password form the output
+//     // user.password = undefined;
+//     // user.cnfpassword = undefined;
 
-    res.status(status).send({
-        status: 'success',
-        token,
-        data: {
-            user
-        }
-    });
-}
+//     res.status(status).send({
+//         status: 'success',
+//         token,
+//         data: {
+//             user
+//         }
+//     });
+// }
 
 
-const signToken = (id, name) => {
-    return jwt.sign({ id: id, name: name }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRED });
-}
+// const signToken = (id, name) => {
+//     return jwt.sign({ id: id, name: name }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRED });
+// }
 
 
 exports.signUp = catchAsync(async (req, res, next) => {
@@ -657,157 +808,270 @@ exports.signUp = catchAsync(async (req, res, next) => {
 
     if (!error.isEmpty()) {
         // console.log("hiiiii",error.errors[0]?.msg)
-        return next(new appError(error.errors[0]?.msg,422));
+        return next(new appError(error.errors[0]?.msg, 422));
     }
- const haspass = await bcrypt.hash(req.body.password, 12)
-        req.body.password = haspass;
-        req.body.post = [];
-        const result = await userModel.create(req.body);
-        // redis.rpush("userDetails",result);
-       const {clientIp}=get_ip(req);
-        logger.info("USER DETAILS", { obj: ` IP : ${clientIp}` });
-        creatSendToken(result, 201, res);
+    const haspass = await bcrypt.hash(req.body.password, 12)
+    req.body.password = haspass;
+    req.body.post = [];
+    const result = await userModel.create(req.body);
+    // redis.rpush("userDetails",result);
+    const { clientIp } = get_ip(req);
+    logger.info("USER DETAILS", { obj: ` IP : ${clientIp}` });
+    // creatSendToken(result, 201, res);
+    res.status(201).json({
+        message:'success',
+        data:"user register successfully!"
+    });
 })
 
 
-exports.login = catchAsync( async (req, res, next) => {
+exports.login = catchAsync(async (req, res, next) => {
     const error = validationResult(req);
 
     if (!error.isEmpty()) {
-    
-       return next(new appError(error.errors[0]?.msg,422));
-    }
- const user = await userModel.findOne({ email: req.body.email });
 
-         if(!user || !await bcrypt.compare(req.body.password, user.password)){
-            return next(new appError('Incorrect Email or Password',401));
-         }
-         creatSendToken(user,200,res);
+        return next(new appError(error.errors[0]?.msg, 422));
+    }
+    const user = await userModel.findOne({ email: req.body.email });
+
+    if (!user || !await bcrypt.compare(req.body.password, user.password)) {
+        return next(new appError('Incorrect Email or Password', 401));
+    }
+    // creatSendToken(user, 200, res);
+    const AccessToken=auth.generateAccessToken(user);
+    const RefreshToken=auth.generateRefreshToken(user);
+    user.refreshToken=RefreshToken;
+    await user.save();
+    res.status(200).send({
+        status: 'success',
+        "AccessToken":AccessToken,
+        "RefreshToken":RefreshToken
+    });
+
 })
 
-exports.getAllUser = catchAsync( async (req, res, next) => {
-let finaldata;
+exports.getAllUser = catchAsync(async (req, res, next) => {
+    let finaldata;
     //  finaldata=await redis.lrange('userDetails',0,-1);
     console.log(finaldata);
 
-    if(finaldata){
+    if (finaldata) {
         console.log('inside redis database');
-      res.status(200).json({
-            message: 'success',
-            total:finaldata.length,
-            data:[...finaldata],
-            info:process.pid
-        })
-    }else{
-        console.log('inside database query');
-         let page = req.query.page;
-        let limit = req.query.limit;
-        // try {
-            const data = await userModel.find().skip((page - 1) * limit).limit(limit);
-            if (data) {
-                res.status(200).json({
-                    message: 'success',
-                    total:data.length,
-                    data:data,
-                    info:process.pid
-                })
-            }
-
-    }
-   
- });
-
-
-exports.deleteUser = catchAsync( async (req, res, next) => {
-    let id = req.params.id;
-    // try {
-        const user = await userModel.findByIdAndDelete(id);
-        if (user) {
-            res.status(200).json({
-                message: 'success',
-                data: "user deleted successfully!!"
-            })
-        }else{
-            return next(new appError('user is not present in database',400));
-        }
-
-})
-
-
-exports.getUserById=catchAsync(async (req,res,next)=>{
-    let id=req.params.id;
-
-    const user=await userModel.findById(id).populate('post');
-    if (user) {
         res.status(200).json({
             message: 'success',
-            data:user
+            total: finaldata.length,
+            data: [...finaldata],
+            info: process.pid
         })
-    }else{
-        return next(new appError('user is not present in database',400));
+    } else {
+        console.log('inside database query');
+        let page = req.query.page;
+        let limit = req.query.limit;
+        // try {
+        const data = await userModel.find().skip((page - 1) * limit).limit(limit);
+        if (data) {
+            res.status(200).json({
+                message: 'success',
+                total: data.length,
+                data: data,
+                info: process.pid
+            })
+        }
+
     }
-    
 
 });
 
 
-exports.editUser=catchAsync(async(req,res,next)=>{
-    let id=req.params.id;
-    console.log(req.file,"file")
-    // try{
-        if(req.file) req.body.photo=req.file.filename;
-        const user=await userModel.findByIdAndUpdate(id,req.body);
-        if(user){
-            res.status(200).json({
-               message:'user updated succeessfully!!!',
-               data:user
-            });
-        }else{
-           
-            return next(new appError('user is not present in database',400));
-        }
+exports.deleteUser = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+    // try {
+    const user = await userModel.findByIdAndDelete(id);
+    if (user) {
+        res.status(200).json({
+            message: 'success',
+            data: "user deleted successfully!!"
+        })
+    } else {
+        return next(new appError('user is not present in database', 400));
+    }
+
 })
 
 
-exports.forgotPass=catchAsync(async(req,res,next)=>{
-    const email=req.body.email;
+exports.verifyUser = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+    const user = await userModel.findByIdAndUpdate(id, {verify:true});
+    if (user) {
+        res.status(200).json({
+            message: 'user verify succeessfully!!!',
+           
+        });
+    } else {
+
+        return next(new appError('user is not present in database', 400));
+    }
+})
+
+
+
+exports.searchUser = catchAsync(async (req, res, next) => {
+    console.log(req.query);
+    let name = req.query.name;
+
+    if (!name) {
+        return next(new appError('please enter name', 400));
+    }
+
+    const list = await userModel.find({ username: { $regex: name, $options: 'i' } })
+    if (list) {
+        res.status(200).json({
+            message: 'success',
+            total: list.length,
+            data: list
+        })
+    } else {
+        return next(new appError('user is not present in database', 400));
+    }
+
+});
+
+
+exports.followUser = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+
+    console.log(id, "iddddd");
+
+
+    let userTofollow = await userModel.findById(id);
+    let currentUser = await userModel.findById(req.user.id);
+
+    if (!userTofollow) {
+        return next(new appError('user is not present in database', 400));
+    }
+
+    if(!userTofollow.followers.includes(req.user.id)){
+        userTofollow.followers.push(req.user.id);
+        currentUser.following.push(id);
+
+        await userTofollow.save();
+        await currentUser.save();
+        res.status(200).json({
+            message:'success',
+            data:'user follow successfully!'
+        })
+
+    }else{
+         return next(new appError('user is already followed', 400));
+    }
+});
+
+
+exports.unFollow=catchAsync(async (req,res,next)=>{
+let id = req.params.id;
+
+let userToUnFollow=await userModel.findById(id);
+let currentUser= await userModel.findById(req.user.id);
+
+ if (!userToUnFollow) {
+        return next(new appError('user is not present in database', 400));
+    }
+
+    if(userToUnFollow.followers.includes(currentUser._id)){
+            userToUnFollow.followers=userToUnFollow.followers.filter(id=>{
+                id !==currentUser._id;
+            });
+
+            currentUser.following=currentUser.following.filter(id=>{
+                id !==userToUnFollow._id;
+            });
+
+            await userToUnFollow.save();
+            await currentUser.save();
+            res.status(200).json({
+                message:'success',
+                data:'user unfollow successfuly!'
+            })
+    }else{
+         return next(new appError('user is already unfollowed', 400));
+    }
+});
+
+
+exports.getUserById = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+
+    const user = await userModel.findById(id).populate('post');
+    if (user) {
+        res.status(200).json({
+            message: 'success',
+            data: user
+        })
+    } else {
+        return next(new appError('user is not present in database', 400));
+    }
+
+
+});
+
+
+exports.editUser = catchAsync(async (req, res, next) => {
+    let id = req.params.id;
+    console.log(req.file, "file")
+    // try{
+    if (req.file) req.body.photo = req.file.path;
+    const user = await userModel.findByIdAndUpdate(id, req.body);
+    if (user) {
+        res.status(200).json({
+            message: 'user updated succeessfully!!!',
+            data: user
+        });
+    } else {
+
+        return next(new appError('user is not present in database', 400));
+    }
+})
+
+
+exports.forgotPass = catchAsync(async (req, res, next) => {
+    const email = req.body.email;
 
     const error = validationResult(req);
 
     if (!error.isEmpty()) {
-    
-       return next(new appError(error.errors[0]?.msg,422));
+
+        return next(new appError(error.errors[0]?.msg, 422));
     }
 
     // try{
-        const user=await userModel.findOne({email:email});
-        if(!user){
-          
-            return next(new appError('user is not present in database',400));
-        }else{
-            crypto.randomBytes(32,async (err,buffer)=>{
-                if(err){
-                   res.status(400).json({
-                    message:'error',
-                    data:err
-                   })
-                    
-                }else{
-                    let token=buffer.toString('hex');
-                    user.resetToken=token;
-                    user.resetTokenExpire=Date.now()+3600000;
-                    user.save();
-                    let url=`visit this url for reset password "http://localhost:3000/api/v1/user/resetPass/${token}"`;
-                    // sendMail(url,user.email,'Reset password ');
-                    await new Email(user, url).sendPassReset();
-                    res.status(200).json({
-                        message:'success',
-                        data:url
-                    })
-                }
+    const user = await userModel.findOne({ email: email });
+    if (!user) {
 
-            })
-        }
+        return next(new appError('user is not present in database', 400));
+    } else {
+        crypto.randomBytes(32, async (err, buffer) => {
+            if (err) {
+                res.status(400).json({
+                    message: 'error',
+                    data: err
+                })
+
+            } else {
+                let token = buffer.toString('hex');
+                user.resetToken = token;
+                user.resetTokenExpire = Date.now() + 3600000;
+                user.save();
+                let url = `visit this url for reset password "http://localhost:3000/api/v1/user/resetPass/${token}"`;
+                // sendMail(url,user.email,'Reset password ');
+                await new Email(user, url).sendPassReset();
+                res.status(200).json({
+                    message: 'success',
+                    data: url
+                })
+            }
+
+        })
+    }
 
     // }catch(err){
     //     console.log(err);
@@ -820,41 +1084,41 @@ exports.forgotPass=catchAsync(async(req,res,next)=>{
 })
 
 
-exports.resetPass=catchAsync( async(req,res,next)=>{
-    const token=req.params.token;
-    
+exports.resetPass = catchAsync(async (req, res, next) => {
+    const token = req.params.token;
+
     // try{
-        
-        if(req.body.password !== req.body.cnfpassword){
-            console.log(true)
-            // return res.status(400).json({
-            //     message:'password not match'
-            // })
-            return next(new appError('password not match',400));
-        }
-        
-        let user= await userModel.findOne({resetToken:token,resetTokenExpire:{$gt:Date.now()}});
-        if(!user){
-            // res.status(400).json({
-            //     message:'error',
-            //     data:'user is not present'
-            // })
-            return next(new appError('user is not present in database',400));
-        }else{
-            console.log(user)
-            const pass= await bcrypt.hash(req.body.password,12);
-            console.log(pass,"passss")
-            // const password= await pass;
-                user.password=pass;
-                user.resetToken=null;
-                user.resetTokenExpire=null;
-                user.save();
-                console.log("jghdhhjk")
-                creatSendToken(user,200,res);
-                //  res.status(200).json({
-                //     message:'password reset successfully!!!'
-                // })
-        }
+
+    if (req.body.password !== req.body.cnfpassword) {
+        console.log(true)
+        // return res.status(400).json({
+        //     message:'password not match'
+        // })
+        return next(new appError('password not match', 400));
+    }
+
+    let user = await userModel.findOne({ resetToken: token, resetTokenExpire: { $gt: Date.now() } });
+    if (!user) {
+        // res.status(400).json({
+        //     message:'error',
+        //     data:'user is not present'
+        // })
+        return next(new appError('user is not present in database', 400));
+    } else {
+        console.log(user)
+        const pass = await bcrypt.hash(req.body.password, 12);
+        console.log(pass, "passss")
+        // const password= await pass;
+        user.password = pass;
+        user.resetToken = null;
+        user.resetTokenExpire = null;
+        user.save();
+        console.log("jghdhhjk")
+        // creatSendToken(user, 200, res);
+         res.status(200).json({
+            message:'password reset successfully!!!'
+        })
+    }
     //  }catch(err){
     //     res.status(500).json({
     //         message: 'error',
@@ -865,18 +1129,18 @@ exports.resetPass=catchAsync( async(req,res,next)=>{
 
 let results = [];
 
-exports.createBulkUser= async(req,res,next)=>{
-results=[];
+exports.createBulkUser = async (req, res, next) => {
+    results = [];
 
-fs.createReadStream(req.file.path)
+    fs.createReadStream(req.file.path)
         .pipe(csv({}))
         .on('data', (data) => {
-            console.log(data,"datatatatat")
+            console.log(data, "datatatatat")
             results.push(data);
 
         })
         .on('end', async () => {
-         
+
             for (let i = 0; i < results.length; i++) {
                 console.log(results[i], "resesd")
 
@@ -901,7 +1165,7 @@ fs.createReadStream(req.file.path)
 
 exports.restrictTo = (...roles) => {
     return (req, res, next) => {
-        console.log(req.user)
+        console.log(req.user,"this is error")
         if (!roles.includes(req.user.role)) {
             return next(new appError('you dont have permission to perform this action', 403));
         }
@@ -912,11 +1176,11 @@ exports.restrictTo = (...roles) => {
 async function createUser(info) {
 
     try {
-        console.log(info,"infoooo")
-        let pass=info.password;
-        info.password= await bcrypt.hash(info.password,12);
+        console.log(info, "infoooo")
+        let pass = info.password;
+        info.password = await bcrypt.hash(info.password, 12);
         const query = await userModel.create(info);
-        let msg=`user register successfully !!
+        let msg = `user register successfully !!
         your username is "${info.email}" and password is "${pass}"
          plz visit this your for login -> "http://localhost:3000/api/v1/user/login"`;
         // sendMail(msg,info.email,'Registration Successfully!!!');
@@ -931,10 +1195,95 @@ async function createUser(info) {
 
 }
 
+exports.generateToken=catchAsync(async (req,res,next)=>{
+    //  const { refreshToken } = req.body;
+
+     console.log("generateToken function called here",req.query.refreshToken);
+     let refreshToken=req.query.refreshToken;
+     
+//   if (!refreshToken) return res.sendStatus(401);
+
+   if (!refreshToken) {
+        return next(new appError('something went wrong', 401));
+    }
+
+  const user = await userModel.findOne({ refreshToken });
+//   if (!user) return res.sendStatus(403);
+
+   if (!user) {
+        return next(new appError('User not found!', 403));
+    }
+
+  jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
+    if (err) return res.sendStatus(403);
+    const accessToken = auth.generateAccessToken(user);
+    res.json({ "accessToken" :accessToken});
+  });
+});
+
+
+exports.towFALogin=catchAsync(async (req,res,next)=>{
+     const error = validationResult(req);
+
+    if (!error.isEmpty()) {
+
+        return next(new appError(error.errors[0]?.msg, 422));
+    }
+    const user = await userModel.findOne({ mobile: req.body.mobile});
+
+    if (!user) {
+        return next(new appError('Incorrect Mobile No.', 401));
+    }
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+    const otpExpires = Date.now() + 5 * 60 * 1000;///expire in 5
+
+    user.otp=otp;
+    user.otpExpire=otpExpires;
+    await user.save();
+
+     const contact =await client.messages.create({
+      body: `Your OTP for login is ${otp}`,
+      from: `+1${process.env.TWILIO_PHONE}`,
+      to: `+91${req.body.mobile}`
+    });
+
+     res.status(200).json({ status: 'success', message: 'OTP sent successfully' });
+
+
+});
 
 
 
-///middleware folder
+exports.verifyOtp = catchAsync(async (req,res,next)=>{
+    const error=validationResult(req);
+   if (!error.isEmpty()) {
+
+        return next(new appError(error.errors[0]?.msg, 422));
+    }
+    const user = await userModel.findOne({ mobile: req.body.mobile });
+    if(user.otp !==req.body.otp || user.otpExpire < Date.now()){
+        return next(new appError('Invalid or expired OTP', 401));
+    }
+    user.otp=undefined;
+    user.otpExpire=undefined;
+    await user.save();
+    const AccessToken=auth.generateAccessToken(user);
+    const RefreshToken=auth.generateRefreshToken(user);
+    user.refreshToken=RefreshToken;
+    await user.save();
+    res.status(200).send({
+        status: 'success',
+        "AccessToken":AccessToken,
+        "RefreshToken":RefreshToken
+    });
+});
+
+
+
+
+
+middleware folder........
 
 1)auth.js
 
@@ -942,51 +1291,63 @@ const jwt=require('jsonwebtoken');
 const userModel=require('../model/userModel')
 
 exports.token=async(req,res,next)=>{
-  let token;
-  if(req.get('Authorization')){
-    token=req.get('Authorization').split(' ')[1];
-    console.log("token authorization",token)
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  console.log(token);
+  
+  if (!token) return res.sendStatus(401);
 
-  }else{
-    return res.status(401).json({
-        message:'plz provide token'
-    })
-  }
-  let  decodeToken;
-  try{
-    console.log("in try")
-    decodeToken=await jwt.verify(token,process.env.JWT_SECRET);
-    console.log(decodeToken,"decodetoken")
-
-    if(!decodeToken){
-        res.status(401).json({
-            message:'not authenticate'
-        })
-      
-      }
-      req.user= await userModel.findOne({_id:decodeToken.id});
-      console.log(req.user,"authuser")
-      next();
-  }catch(err){
-    // console.log(err)
-    // throw err;
-    res.status(401).json({
-        message:'not verify'
-    })
-  }
-
- 
-// }
-// next('please provide token'); 
+  jwt.verify(token, process.env.JWT_SECRET, async (err, user) => {
+    
+    if (err) return res.status(403).json({
+      message:'token expired'
+    });
+    console.log(user,"this is user");
+    let userData=await userModel.findById(user.id)
+    req.user = userData;
+    next();
+  });
 }
 
 
+model folder..........
+
+1)notificationmodel.js
+
+const mongoose=require('mongoose');
+
+const Schema=mongoose.Schema;
+
+const notificationSchema=new Schema({
+     sender:{
+            type:Schema.Types.ObjectId,
+           ref:'User',
+           required:true
+        },
+        receiver:{
+            type:Schema.Types.ObjectId,
+           ref:'User',
+           required:true
+        },
+          type: {
+        type: String,
+        enum: ['like', 'comment', 'follow'],
+        required: true
+    },
+     post:{
+            type:Schema.Types.ObjectId,
+           ref:'Post',
+           required:true
+        },
+        isRead: { type: Boolean, default: false },
+},{ timestamps: true });
+
+
+module.exports=mongoose.model('Notification',notificationSchema)
 
 
 
-///////model folder
-
-1)postmodel.js
+2)postmodel.js
 
 const { string, required, ref } = require('joi');
 const mongoose=require('mongoose');
@@ -1011,6 +1372,11 @@ const feedModel=new Schema({
         type:Schema.Types.ObjectId,
        ref:'User',
        required:true
+    },
+      visibility: {
+        type: String,
+        enum: ['public', 'private'],
+        default:'public'
     },
     comments:[
         {
@@ -1045,8 +1411,46 @@ const feedModel=new Schema({
 module.exports=mongoose.model('Post',feedModel);
 
 
+3)storymodel.js
 
-2)templateModel.js
+const { required } = require('joi');
+const mongoose=require('mongoose');
+
+const Schema=mongoose.Schema;
+
+
+const storyModel=new Schema({
+    userId:{
+          type:Schema.Types.ObjectId,
+               ref:'User',
+               required:true
+    },
+    mediaUrl:{
+        type:String,
+        required:true,
+
+    },
+    mediaType:{
+        type:String,
+        enum: ['image', 'video'],
+         default: 'image'
+    },
+    //  createdAt: { 
+    //     type: Date,
+    //      default: Date.now 
+    //     },
+ expiresAt: { 
+    type: Date 
+}
+})
+
+storyModel.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); //  TTL index ensures story auto-deletes after 24 hours.
+
+
+module.exports=mongoose.model('Story',storyModel);
+
+
+4)templatemodel.js
 
 const mongoose=require('mongoose');
 
@@ -1091,10 +1495,9 @@ const template=new schema({
 module.exports=mongoose.model('Template',template)
 
 
+5)usermodel.js
 
-
-
-3)userModel.js
+const { boolean } = require('joi');
 const mongoose=require('mongoose')
 
 const schema=mongoose.Schema;
@@ -1102,22 +1505,41 @@ const schema=mongoose.Schema;
 const User=new schema({
     email:{
         type:String,
-        required:true
+        required:true,
+        unique:true
     },
     password:{
         type:String,
         required:true
     },
-    name:{
+    username:{
         type:String,
-        required:true
+        required:true,
+        unique:true
     },
     photo:{
         type:String
     },
+    mobile:{
+        type:Number,
+        unique:true
+    },
+    otp:{
+            type:Number
+    },
+    otpExpire:{
+        type:Date
+    },
     role:{
         type:String,
         required:false
+    },
+    refreshToken:{
+        type:String
+    },
+    verify:{
+        type:Boolean,
+        default:false
     },
     resetToken:{
         type:String
@@ -1131,7 +1553,10 @@ const User=new schema({
             type:schema.Types.ObjectId,
             ref:'Post'
         }
-    ]
+    ],
+
+     followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
 },{timestamps:true});
 
 
@@ -1139,11 +1564,29 @@ module.exports=mongoose.model('User',User)
 
 
 
+router folder................
 
-////router start here
 
-1)postRouter.js
-                                                                                                                                                                                                                                                                                    const express=require('express');
+1)notificationRouter.js
+
+const express=require('express');
+
+const router=express.Router();
+
+const auth=require('../middleware/auth');
+const {body}=require('express-validator');
+
+const notificationController=require('../controller/notificationController');
+
+router.get('/',auth.token,notificationController.getNotification).patch('/read/:id',auth.token,notificationController.markAsRead)
+
+
+module.exports=router;
+
+
+2)postrouter.js
+
+const express=require('express');
 
 const router=express.Router();
 
@@ -1175,8 +1618,27 @@ module.exports=router;
 
 
 
+3)storyrouter.js
 
-2)templateRouter.js
+const express=require('express');
+const Router=express.Router();
+
+const auth=require('../middleware/auth');
+const {body}=require('express-validator');
+const parser=require('.././util/multer')
+
+const storyController=require('../controller/storyController')
+
+
+Router.post('/createStory',auth.token,parser.single('mediaUrl'),storyController.createStory)
+.get('/getAllStory',auth.token,storyController.getAllStory)
+
+
+module.exports=Router;
+
+
+
+4) templaterouter.js
 
 const express=require('express');
 const templateController=require('../controller/templateController');
@@ -1190,9 +1652,8 @@ router.post('/createTemplate',auth.token,templateController.uploadFile,templateC
 module.exports=router;
 
 
+5)userrouter.js
 
-
-3)userRouter.js
 const express=require('express');
 const userController=require('../controller/userController');
 const {body}=require('express-validator');
@@ -1201,6 +1662,8 @@ const userModel=require('../model/userModel');
 const router=express.Router();
 
 const auth=require('../middleware/auth')  
+
+const parser=require('.././util/multer')
 
 // router.get('/samplecall',userController.sampleCall)
 
@@ -1211,17 +1674,18 @@ router.post('/signUp',[body('email').isEmail().withMessage('plz enter valid emai
             return Promise.reject('User is already Register');
         }
     })
-}),body('password').trim().isLength({min:4,max:6}).withMessage('plz enter a valid password'),body('name').trim().notEmpty().withMessage('user name is mandatory'),body('role').trim().notEmpty().withMessage('role is mandotory')],userController.signUp)
+}),body('password').trim().isLength({min:4,max:6}).withMessage('plz enter a valid password'),body('username').trim().notEmpty().withMessage('user name is mandatory'),body('role').trim().notEmpty().withMessage('role is mandotory')],userController.signUp)
 
 .post('/login',[body('email').isEmail().withMessage('plz enter valid email'),body('password').trim().isLength({min:4,max:10}).withMessage('plz enter a valid password')],userController.login)
 
-.get('/getAllUser',auth.token,userController.getAllUser)
+.get('/getAllUser',auth.token,userController.restrictTo('admin'),userController.getAllUser)
 
 .get('/getUserById/:id',auth.token,userController.getUserById)
 
 .delete('/delete/:id',auth.token,userController.deleteUser)
 
-.patch('/editUser/:id',auth.token,userController.uploadPhoto,userController.editUser)
+// .patch('/editUser/:id',auth.token,userController.uploadPhoto,userController.editUser)
+.patch('/editUser/:id',auth.token,parser.single('image'),userController.editUser)
 
 .post('/forgotpass',body('email').isEmail().withMessage('plz enter valid email'),userController.forgotPass)
 
@@ -1231,16 +1695,30 @@ router.post('/signUp',[body('email').isEmail().withMessage('plz enter valid emai
 
 .post('/createBulk',userController.uploadFile,userController.createBulkUser)
 
+.get('/search',auth.token,userController.searchUser).patch('/follow/:id',auth.token,userController.followUser).patch('/unfollow/:id',auth.token,userController.unFollow)
+
+.post('/token',userController.generateToken)
+
+.post('/verify/:id',auth.token,userController.restrictTo('admin'),userController.verifyUser)
+
+
+/////opt though login and verify otp
+
+.post('/otp',userController.towFALogin)
+.post('/verifyOpt',userController.verifyOtp)
+
 
 
 module.exports=router;
 
 
-////util folder start here
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-1.appError.js
-                                                                                                                                                                                                                                                                                                                                                                          
- class AppError extends Error {
+
+util folder....................................................................
+
+
+1)appError.js
+
+class AppError extends Error {
     constructor(message, statusCode) {
         super(message);
         this.statusCode = statusCode;
@@ -1251,10 +1729,25 @@ module.exports=router;
 }
 
 module.exports = AppError
-                                                                                                                                                                                                                                                                                                                                                                              
-                                                                                                                                                                                                                                                                                                                                                                          
-2.catchAsync.js                                                                                                                                                                                                                                                                                                                                                                          
-                                                                                                                                                                                                                                                                                                                                                                          
+
+
+2)auth.js
+
+const jwt = require("jsonwebtoken");
+
+function generateAccessToken(user) {
+  return jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRED });
+}
+
+function generateRefreshToken(user) {
+  return jwt.sign({ id: user._id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: process.env.REFRESH_TOKEN_SECRET_EXPIRED });
+}
+
+module.exports = { generateAccessToken, generateRefreshToken };
+
+
+3)catchasync.js
+
 module.exports = fn => {
     return (req, res, next) => {
 
@@ -1263,7 +1756,23 @@ module.exports = fn => {
 }
 
 
-3.email.js
+4)cloudnary.js
+
+// cloudinary.js
+const cloudinary = require('cloudinary').v2;
+const dotenv = require('dotenv');
+dotenv.config();
+
+cloudinary.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUD_API_KEY,
+  api_secret: process.env.CLOUD_API_SECRET,
+});
+
+module.exports = cloudinary;
+
+
+5)email.js
 
 const nodemailer = require('nodemailer');
 
@@ -1333,7 +1842,29 @@ module.exports = class Email {
 // module.exports = sendmail;
 
 
-4.redisconnection.js
+
+6)multer.js
+
+// multer.js
+const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('./cloudnary');
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'uploads', // Folder in Cloudinary
+    allowed_formats: ['jpg', 'png', 'jpeg'],
+  },
+});
+
+const parser = multer({ storage: storage });
+
+module.exports = parser;
+
+
+
+7)redisconnection.js
 
 // const redis = require('redis');
 
@@ -1356,10 +1887,9 @@ const client=new redis();
 module.exports = client;
 
 
+8)winston.js
 
-5.winston.js
-                                                                                                                                                                                                                                                                                                                                                                                                                
- var appRoot = require('app-root-path');
+var appRoot = require('app-root-path');
 const { createLogger, format, transports } = require('winston');
 const { combine, timestamp, printf } = format;
 
@@ -1384,11 +1914,13 @@ const logger = createLogger({
 })
 
 
-module.exports = logger;                                                                                                                                                                                                                                                                                                                                                                                                               
-                                                                                                                                                                                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                                                                                                                                                                                
-  ////app.js code start                                                                                                                                                                                                                                                                                                                                                                                                              
+module.exports = logger;
+
+
+
+
+****app.js
+
 
 const express = require('express');
 const bodyparser = require('body-parser');
@@ -1397,8 +1929,14 @@ const bodyparser = require('body-parser');
 const userRouter=require('./router/userRouter');
 const templateRouter=require('./router/templateRouter');
 const postRouter=require('./router/postRouter');
+const storyRouter=require('./router/storyRouter');
+const notificationRouter=require('./router/notificationRouter');
 
 
+
+
+
+const compression = require('compression');
 
 const AppErr = require('./util/appError');
 const errorController = require('./controller/errorController')
@@ -1414,7 +1952,12 @@ var expressWinston = require('express-winston');
 const ratelimit=require('express-rate-limit');
 const helmet=require('helmet');
 
-const xss = require('xss-clean')
+const xss = require('xss-clean');
+const cron = require('node-cron');
+
+const fs = require('fs-extra');
+
+const archiver = require('archiver');
 
 app.use(bodyparser.json());//parsing incoming request body
 
@@ -1440,7 +1983,9 @@ const limiter = ratelimit({
 
 app.use(limiter);
 app.use(helmet());
-app.use(xss())
+app.use(compression());
+app.use(xss());////security purpose sathi
+app.use(morgan('combined'));///logs all details of system when api call triggered
 
 app.use('/img',express.static(path.join(__dirname,'img')));
 
@@ -1468,9 +2013,66 @@ const templateInfo = new winston.transports.DailyRotateFile({
     format: false
   }))
 
+
+
+
+  ///schedular run here
+
+  const logsDir = path.join(__dirname, 'logs');
+
+  function getZipFilePath() {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, '-');
+  return path.join(__dirname, `logs-backup-${timestamp}.zip`);
+}
+
+ 
+// cron.schedule('5 * * * *', async () => {
+//   console.log('📦 Zipping logs and cleaning...');
+
+//   const zipPath = getZipFilePath();
+//   const output = fs.createWriteStream(zipPath);
+//   const archive = archiver('zip', { zlib: { level: 9 } });
+
+//   output.on('close', async () => {
+//     console.log(`✅ Backup zip created: ${zipPath}`);
+//     // Delete .log files after zip is done
+//     const files = await fs.readdir(logsDir);
+//     for (const file of files) {
+//       if (file.startsWith('TemplateLogger')) {
+//         await fs.remove(path.join(logsDir, file));
+//         console.log(`🗑️ Deleted: ${file}`);
+//       }
+//     }
+//   });
+
+//   archive.on('error', err => {
+//     console.error('❌ Archive Error:', err);
+//   });
+
+//   archive.pipe(output);
+
+//   // Add all .log files
+//   const files = await fs.readdir(logsDir);
+//   for (const file of files) {
+//     if (file.startsWith('TemplateLogger')) {
+//       const filePath = path.join(logsDir, file);
+//       archive.file(filePath, { name: file });
+//     }
+//   }
+
+//   archive.finalize();
+// });
+
+
+
+
+
 app.use('/api/v1/user',userRouter);
 app.use('/api/v1/template',templateRouter);
 app.use('/api/v1/post',postRouter);
+app.use('/api/v1/story',storyRouter);
+app.use('/api/v1/notification',notificationRouter)
 
 app.all('*', (req, res, next) => {
     next(new AppErr(`cant find ${req.originalUrl} on server`, 404));
@@ -1480,14 +2082,12 @@ app.use(errorController)
 module.exports=app;
 
 
-
-
-///config.env
+****config.env
 
 NODE_ENV=development
 
 
-///config.json
+***config.json
 
 {
     "development": {
@@ -1497,13 +2097,22 @@ NODE_ENV=development
         "PORT": 3000,
         "DATABASE_LOCAL": "mongodb://localhost:27017/userCreation",
         "JWT_SECRET": "gshjshskjsshjsashashajshskjahsajshaskhsjshskjshkjashkshkjshs",
-        "JWT_EXPIRED": "90d",
+        "REFRESH_TOKEN_SECRET":"jshkjashkshkjshsgshjshskjsshjsashashajshskjahsajshaskhsjshsk",
+       "JWT_EXPIRED": "15m",
+        "REFRESH_TOKEN_SECRET_EXPIRED":"7d",
+         "TWILIO_ACCOUNT_SID":"ACfe035e31d68a95a0974af963dc692b2b",
+        "TWILIO_AUTH_TOKEN":"bc02a262cd1cce2d86fa4acf6fa4bac0",
+        "TWILIO_PHONE":"5155795818",
         "JWT_COOKIE_EXPIRES": 90,
-        "EMAIL_USERNAME": "cali.fritsch@ethereal.email",
-        "EMAIL_PASS": "N4Q2WP6cqB41BMFEWj",
+        "EMAIL_USERNAME": "lavada.bogan34@ethereal.email",
+        "EMAIL_PASS": "mQ5wXzzswktcHAWbg8",
         "EMAIL_HOST": "smtp.ethereal.email",
         "EMAIL_PORT": 587,
-        "EMAIL_FROM": "kadamadinath31@gmail.com"
+        "EMAIL_FROM": "kadamadinath31@gmail.com",
+        "CLOUD_NAME":"dfpu50zzm",
+"CLOUD_API_KEY":"835725942829653",
+"CLOUD_API_SECRET":"31Ny0e8_XmsiCdtyFHQiiFCrlRM"
+
     },
     "production": {
         "NODE_ENV": "production",
@@ -1512,30 +2121,58 @@ NODE_ENV=development
         "PORT": 3000,
         "DATABASE_LOCAL": "mongodb://localhost:27017/userCreation",
         "JWT_SECRET": "gshjshskjsshjsashashajshskjahsajshaskhsjshskjshkjashkshkjshs",
-        "JWT_EXPIRED": "90d",
+          "REFRESH_TOKEN_SECRET":"jshkjashkshkjshsgshjshskjsshjsashashajshskjahsajshaskhsjshsk",
+        "JWT_EXPIRED": "15m",
+        "REFRESH_TOKEN_SECRET_EXPIRED":"7d",
+        "TWILIO_ACCOUNT_SID":"ACfe035e31d68a95a0974af963dc692b2b",
+        "TWILIO_AUTH_TOKEN":"bc02a262cd1cce2d86fa4acf6fa4bac0",
+        "TWILIO_PHONE":"911234567891",
         "JWT_COOKIE_EXPIRES": 90,
         "EMAIL_USERNAME": "ff4ebc7d1602f8",
         "EMAIL_PASS": "50cfd567108e66",
         "EMAIL_HOST": "smtp.mailtrap.io",
         "EMAIL_PORT": 25,
-        "EMAIL_FROM": "kadamadinath31@gmail.com"
+        "EMAIL_FROM": "kadamadinath31@gmail.com",
+           "CLOUD_NAME":"dfpu50zzm",
+"CLOUD_API_KEY":"835725942829653",
+"CLOUD_API_SECRET":"31Ny0e8_XmsiCdtyFHQiiFCrlRM"
     }
 }
 
 
 
 
-////docker file
-FROM node:slim
+****docker.dockerignore
+
+node_modules
+logs
+*.log
+.env
+config.env
+Dockerfile
+.dockerignore
+.git
+.gitignore
+.DS_Store
+
+
+
+*****dockerfile
+
+FROM node:18
 WORKDIR /app
+COPY package*.json ./
 COPY . /app
+COPY . .
+COPY config.env ./config.env
 RUN npm install
 EXPOSE 4000
 CMD node server.js
 
 
 
-///package.json
+
+******package.json
 
 {
   "name": "createuserproject",
@@ -1551,13 +2188,18 @@ CMD node server.js
   "license": "ISC",
   "dependencies": {
     "app-root-path": "^3.1.0",
+    "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.3",
+    "cloudinary": "^1.41.3",
+    "compression": "^1.8.0",
     "csv-parser": "^3.1.0",
+    "dotenv": "^16.5.0",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "express-validator": "^7.2.0",
     "express-winston": "^4.2.0",
+    "fs-extra": "^11.3.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.6.0",
     "ipware": "^2.0.0",
@@ -1566,9 +2208,12 @@ CMD node server.js
     "mongoose": "^8.9.1",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^4.1.0",
     "nodemailer": "^6.9.16",
     "pm2": "^5.4.3",
     "redis": "^4.7.0",
+    "twilio": "^5.8.0",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
     "xss-clean": "^0.1.4"
@@ -1579,7 +2224,9 @@ CMD node server.js
 }
 
 
-////server.js
+
+
+***********server.js
 
 // const dotenv = require('dotenv');
 const config = require('./config.json');
@@ -1640,6 +2287,9 @@ if(cluster.isPrimary){
             console.log(totalcpu);
             
         });
+    }).catch(err=>{
+        console.log(err);
+        
     });
 
 }
@@ -1664,6 +2314,8 @@ process.on('unhandledRejection', err => {
 
     });
 });
+
+
 
 
 
